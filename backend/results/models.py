@@ -71,12 +71,19 @@ class ExamResult(models.Model):
         """
         Recalculates total score, percentage, and pass/fail status.
         """
-        self.total_score = self.objective_score + self.descriptive_score
-        if self.exam.total_marks > 0:
-            self.percentage = round(float((self.total_score / self.exam.total_marks) * 100), 2)
+        from decimal import Decimal
+        obj = Decimal(str(self.objective_score or '0.0'))
+        desc = Decimal(str(self.descriptive_score or '0.0'))
+        self.total_score = obj + desc
+
+        exam_total = Decimal(str(self.exam.total_marks or '0.0'))
+        if exam_total > Decimal('0.0'):
+            self.percentage = round(float((self.total_score / exam_total) * Decimal('100.0')), 2)
         else:
             self.percentage = 0.0
-        self.passed = self.total_score >= self.exam.pass_marks
+
+        pass_threshold = Decimal(str(self.exam.pass_marks or '0.0'))
+        self.passed = self.total_score >= pass_threshold
         self.save()
 
     def __str__(self):

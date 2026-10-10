@@ -50,6 +50,7 @@ INSTALLED_APPS = [
     # Third-party packages
     'corsheaders',
     'rest_framework',
+    'rest_framework.authtoken',
 
     # Project Apps
     'accounts',
@@ -166,6 +167,7 @@ CORS_ALLOW_CREDENTIALS = True
 # Django REST Framework Configuration
 REST_FRAMEWORK = {
     'DEFAULT_AUTHENTICATION_CLASSES': [
+        'rest_framework.authentication.TokenAuthentication',
         'rest_framework.authentication.SessionAuthentication',
     ],
     'DEFAULT_PERMISSION_CLASSES': [
