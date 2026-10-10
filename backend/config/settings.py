@@ -50,7 +50,16 @@ INSTALLED_APPS = [
     # Third-party packages
     'corsheaders',
     'rest_framework',
+
+    # Project Apps
+    'accounts',
+    'exams',
+    'attempts',
+    'proctoring',
+    'results',
 ]
+
+AUTH_USER_MODEL = 'accounts.User'
 
 MIDDLEWARE = [
     'django.middleware.security.SecurityMiddleware',
@@ -86,6 +95,8 @@ WSGI_APPLICATION = 'config.wsgi.application'
 # Database
 # https://docs.djangoproject.com/en/6.1/ref/settings/#databases
 
+import sys
+
 DATABASES = {
     'default': {
         'ENGINE': os.getenv('DB_ENGINE', 'django.db.backends.mysql'),
@@ -99,6 +110,13 @@ DATABASES = {
         },
     }
 }
+
+# Use fast in-memory SQLite database during unit test execution
+if 'test' in sys.argv:
+    DATABASES['default'] = {
+        'ENGINE': 'django.db.backends.sqlite3',
+        'NAME': ':memory:',
+    }
 
 
 # Password validation
