@@ -158,6 +158,10 @@ export const ExamRoom = () => {
     }, 8000);
   }, []);
 
+  const handleFullscreenWarning = useCallback(() => {
+    setShowFullscreenModal(true);
+  }, []);
+
   // Current Question Helpers
   const currentQ = questions[currentIndex] || null;
   const currentAnswer = currentQ ? answers[currentQ.id] || {} : {};
@@ -218,6 +222,13 @@ export const ExamRoom = () => {
   const handleFinalSubmit = async (isAuto = false) => {
     if (submitting || !attempt?.id) return;
     setSubmitting(true);
+
+    // Immediately release and turn off camera hardware upon exam submission
+    if (window.__stopExamWebcam) {
+      try {
+        window.__stopExamWebcam();
+      } catch {}
+    }
 
     try {
       await studentAPI.submitAttempt(attempt.id);
@@ -523,8 +534,8 @@ export const ExamRoom = () => {
           {/* Transparent Webcam & Face Detection Module */}
           <ProctoringBadge
             attemptId={attempt.id}
-            enableProctoring={attempt.enable_proctoring}
-            onFullscreenWarning={() => setShowFullscreenModal(true)}
+            enableProctoring={attempt.enable_proctoring && !attempt.is_completed && !submitting}
+            onFullscreenWarning={handleFullscreenWarning}
             onWarning={handleProctoringWarning}
           />
         </div>

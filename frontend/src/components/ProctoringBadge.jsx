@@ -1,8 +1,56 @@
-import React, { useEffect, useRef, useState } from 'react';
+import React, { useEffect, useRef, useState, useCallback } from 'react';
 import { studentAPI } from '../api/client';
 import { FilesetResolver, FaceDetector } from '@mediapipe/tasks-vision';
 
-export const ProctoringBadge = ({
+import {
+  ProctoringState,
+  STATE_CONFIG,
+  isCameraStreamLive,
+  stopMediaStream,
+} from '../utils/proctoringHelpers';
+
+export { ProctoringState, STATE_CONFIG, isCameraStreamLive, stopMediaStream };
+
+// Module-level singleton cache for MediaPipe FaceDetector to prevent repeated downloads
+let sharedVisionPromise = null;
+let sharedDetectorPromise = null;
+
+async function getSharedFaceDetector() {
+  if (!sharedVisionPromise) {
+    sharedVisionPromise = FilesetResolver.forVisionTasks(
+      'https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@latest/wasm'
+    );
+  }
+  if (!sharedDetectorPromise) {
+    sharedDetectorPromise = (async () => {
+      const vision = await sharedVisionPromise;
+      try {
+        return await FaceDetector.createFromOptions(vision, {
+          baseOptions: {
+            modelAssetPath:
+              'https://storage.googleapis.com/mediapipe-models/face_detector/blaze_face_short_range/float16/1/blaze_face_short_range.tflite',
+            delegate: 'GPU',
+          },
+          runningMode: 'VIDEO',
+        });
+      } catch (err) {
+        console.warn('GPU delegate not supported for MediaPipe FaceDetector, falling back to CPU:', err);
+        return await FaceDetector.createFromOptions(vision, {
+          baseOptions: {
+            modelAssetPath:
+              'https://storage.googleapis.com/mediapipe-models/face_detector/blaze_face_short_range/float16/1/blaze_face_short_range.tflite',
+            delegate: 'CPU',
+          },
+          runningMode: 'VIDEO',
+        });
+      }
+    })();
+  }
+  return sharedDetectorPromise;
+}
+
+
+const ProctoringBadgeComponent = ({
   attemptId,
   enableProctoring = true,
   onFullscreenWarning,
@@ -11,120 +59,204 @@ export const ProctoringBadge = ({
   const videoRef = useRef(null);
   const streamRef = useRef(null);
   const detectorRef = useRef(null);
-  const animFrameRef = useRef(null);
+  const detectionIntervalRef = useRef(null);
 
   // Status & Telemetry
-  const [cameraActive, setCameraActive] = useState(false);
-  const [cameraStatus, setCameraStatus] = useState('Initializing webcam...');
-  const [faceCount, setFaceCount] = useState(1);
-  const [modelReady, setModelReady] = useState(false);
+  const [monitoringState, setMonitoringState] = useState(ProctoringState.CAMERA_INITIALIZING);
+  const [isCameraLive, setIsCameraLive] = useState(false);
+  const [cameraStatusMsg, setCameraStatusMsg] = useState('Initializing webcam...');
+  const [faceCount, setFaceCount] = useState(null); // Never default to 1!
   const [lastWarningMsg, setLastWarningMsg] = useState(null);
 
-  // Interval Tracking Refs (to avoid stale closures in detection loop)
+  // Synchronous refs for intervals & closures
+  const monitoringStateRef = useRef(ProctoringState.CAMERA_INITIALIZING);
+  monitoringStateRef.current = monitoringState;
+
+  const onWarningRef = useRef(onWarning);
+  const onFullscreenWarningRef = useRef(onFullscreenWarning);
+  useEffect(() => {
+    onWarningRef.current = onWarning;
+    onFullscreenWarningRef.current = onFullscreenWarning;
+  });
+
   const noFaceDurationRef = useRef(0);
   const multiFaceDurationRef = useRef(0);
-  const lastLoggedEventRef = useRef({ NO_FACE: 0, MULTI_FACE: 0 });
+  const lastLoggedEventRef = useRef({ NO_FACE: 0, MULTI_FACE: 0, DISCONNECT: 0 });
+  const lastVideoTimeRef = useRef(-1);
+  const frozenFrameCountRef = useRef(0);
+  const isUnmountedRef = useRef(false);
 
+  // Stops all media tracks, releases video resources, and clears detection intervals
+  const stopCameraStream = useCallback(() => {
+    if (detectionIntervalRef.current) {
+      clearInterval(detectionIntervalRef.current);
+      detectionIntervalRef.current = null;
+    }
+    stopMediaStream(streamRef.current, videoRef.current);
+    streamRef.current = null;
+    setIsCameraLive(false);
+    setFaceCount(null);
+    setMonitoringState(ProctoringState.CAMERA_UNAVAILABLE);
+    setCameraStatusMsg('Camera closed');
+  }, []);
+
+  // Ensure camera is immediately stopped when enableProctoring becomes false
+  useEffect(() => {
+    if (!enableProctoring) {
+      stopCameraStream();
+    }
+  }, [enableProctoring, stopCameraStream]);
+
+  // Expose global cleaner so submission handlers can stop the stream synchronously
+  useEffect(() => {
+    window.__stopExamWebcam = stopCameraStream;
+    return () => {
+      stopCameraStream();
+      if (window.__stopExamWebcam === stopCameraStream) {
+        window.__stopExamWebcam = null;
+      }
+    };
+  }, [stopCameraStream]);
+
+  // Handles camera becoming stopped, revoked, or unavailable
+  const handleCameraUnavailable = useCallback((reason = 'Camera stopped or unavailable') => {
+    if (isUnmountedRef.current) return;
+    monitoringStateRef.current = ProctoringState.CAMERA_UNAVAILABLE;
+    setMonitoringState(ProctoringState.CAMERA_UNAVAILABLE);
+    setFaceCount(null); // Clear previous face count immediately
+    setIsCameraLive(false);
+    setCameraStatusMsg(reason);
+
+    const now = Date.now();
+    if (now - lastLoggedEventRef.current.DISCONNECT > 6000) {
+      lastLoggedEventRef.current.DISCONNECT = now;
+      studentAPI.logProctoringEvent({
+        attempt_id: attemptId,
+        event_type: 'CAMERA_DISCONNECTED',
+        details: { reason, timestamp: new Date().toISOString() },
+      }).catch(() => {});
+
+      if (onWarningRef.current) {
+        onWarningRef.current({
+          type: 'CAMERA_DISCONNECTED',
+          message: 'Webcam feed was disconnected or stopped. Please reconnect your camera.',
+        });
+      }
+    }
+  }, [attemptId]);
+
+  // Handles camera feed restored
+  const handleCameraRestored = useCallback(() => {
+    if (isUnmountedRef.current) return;
+    if (isCameraStreamLive(streamRef.current)) {
+      setIsCameraLive(true);
+      setMonitoringState(ProctoringState.CAMERA_ACTIVE_PENDING);
+      monitoringStateRef.current = ProctoringState.CAMERA_ACTIVE_PENDING;
+      setCameraStatusMsg('Live Feed Restored');
+      studentAPI.logProctoringEvent({
+        attempt_id: attemptId,
+        event_type: 'CAMERA_RECONNECTED',
+        details: { timestamp: new Date().toISOString() },
+      }).catch(() => {});
+    }
+  }, [attemptId]);
+
+  // Initialize webcam stream
+  const initWebcam = useCallback(async () => {
+    if (!enableProctoring || !attemptId || isUnmountedRef.current) return;
+
+    // Clean up any stale tracks first to prevent stream duplication
+    stopCameraStream();
+
+    setMonitoringState(ProctoringState.CAMERA_INITIALIZING);
+    monitoringStateRef.current = ProctoringState.CAMERA_INITIALIZING;
+    setFaceCount(null);
+    setCameraStatusMsg('Requesting camera access...');
+
+    try {
+      const stream = await navigator.mediaDevices.getUserMedia({
+        video: { width: { ideal: 320 }, height: { ideal: 240 }, frameRate: { max: 15 } },
+        audio: false,
+      });
+
+      if (isUnmountedRef.current) {
+        stream.getTracks().forEach((t) => t.stop());
+        return;
+      }
+
+      streamRef.current = stream;
+
+      // Attach track event listeners for disconnection / mute
+      const videoTrack = stream.getVideoTracks()[0];
+      if (videoTrack) {
+        videoTrack.onended = () => {
+          handleCameraUnavailable('Camera disconnected or ended');
+        };
+        videoTrack.onmute = () => {
+          handleCameraUnavailable('Camera feed muted or blocked');
+        };
+        videoTrack.onunmute = () => {
+          handleCameraRestored();
+        };
+      }
+
+      if (videoRef.current) {
+        videoRef.current.srcObject = stream;
+        videoRef.current.onloadedmetadata = () => {
+          if (!isUnmountedRef.current && videoRef.current) {
+            videoRef.current.play().catch(() => {});
+          }
+        };
+      }
+
+      setIsCameraLive(true);
+      setCameraStatusMsg('Live Feed Active');
+      setMonitoringState(ProctoringState.CAMERA_ACTIVE_PENDING);
+      monitoringStateRef.current = ProctoringState.CAMERA_ACTIVE_PENDING;
+
+      studentAPI.logProctoringEvent({
+        attempt_id: attemptId,
+        event_type: 'CAMERA_RECONNECTED',
+        details: { message: 'Webcam feed established.' },
+      }).catch(() => {});
+    } catch (err) {
+      if (isUnmountedRef.current) return;
+      const errMsg = err.name === 'NotAllowedError'
+        ? 'Camera permission denied.'
+        : 'Camera blocked or unavailable.';
+      handleCameraUnavailable(errMsg);
+    }
+  }, [attemptId, enableProctoring, handleCameraUnavailable, handleCameraRestored]);
+
+  // Public reconnect handler for student retry button
+  const handleReconnectClick = useCallback(() => {
+    initWebcam();
+  }, [initWebcam]);
+
+  // Main Effect: Stream setup, Face detector initialization & Window listeners
   useEffect(() => {
     if (!enableProctoring || !attemptId) return;
 
-    let isMounted = true;
+    isUnmountedRef.current = false;
 
-    // 1. Initialize Webcam
-    const initWebcam = async () => {
-      try {
-        setCameraStatus('Requesting camera access...');
-        const stream = await navigator.mediaDevices.getUserMedia({
-          video: { width: { ideal: 320 }, height: { ideal: 240 }, frameRate: { max: 15 } },
-          audio: false,
-        });
-
-        if (!isMounted) {
-          stream.getTracks().forEach((t) => t.stop());
-          return;
-        }
-
-        streamRef.current = stream;
-        if (videoRef.current) {
-          videoRef.current.srcObject = stream;
-          videoRef.current.onloadedmetadata = () => {
-            videoRef.current.play().catch(() => {});
-          };
-        }
-        setCameraActive(true);
-        setCameraStatus('Live Feed Active');
-
-        studentAPI.logProctoringEvent({
-          attempt_id: attemptId,
-          event_type: 'CAMERA_RECONNECTED',
-          details: { message: 'Webcam feed established.' },
-        }).catch(() => {});
-      } catch (err) {
-        if (!isMounted) return;
-        const errMsg = err.name === 'NotAllowedError'
-          ? 'Camera permission denied.'
-          : 'Camera blocked or unavailable.';
-        setCameraStatus(errMsg);
-        setCameraActive(false);
-
-        studentAPI.logProctoringEvent({
-          attempt_id: attemptId,
-          event_type: 'CAMERA_DISCONNECTED',
-          details: { error: err.name || 'Unavailable' },
-        }).catch(() => {});
-
-        if (onWarning) {
-          onWarning({
-            type: 'CAMERA_ERROR',
-            message: 'Camera permission denied or camera disconnected. Please ensure webcam is accessible.',
-          });
-        }
-      }
-    };
-
-    // 2. Initialize MediaPipe Face Detector
-    const initFaceDetector = async () => {
-      try {
-        const vision = await FilesetResolver.forVisionTasks(
-          'https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@latest/wasm'
-        );
-
-        let detector;
-        try {
-          detector = await FaceDetector.createFromOptions(vision, {
-            baseOptions: {
-              modelAssetPath:
-                'https://storage.googleapis.com/mediapipe-models/face_detector/blaze_face_short_range/float16/1/blaze_face_short_range.tflite',
-              delegate: 'GPU',
-            },
-            runningMode: 'VIDEO',
-          });
-        } catch {
-          // Fallback to CPU if GPU delegate is unavailable
-          detector = await FaceDetector.createFromOptions(vision, {
-            baseOptions: {
-              modelAssetPath:
-                'https://storage.googleapis.com/mediapipe-models/face_detector/blaze_face_short_range/float16/1/blaze_face_short_range.tflite',
-              delegate: 'CPU',
-            },
-            runningMode: 'VIDEO',
-          });
-        }
-
-        if (!isMounted) return;
-        detectorRef.current = detector;
-        setModelReady(true);
-      } catch (err) {
-        console.warn('Face detection model init failed; operating with basic camera proctoring:', err);
-        if (isMounted) {
-          setModelReady(false);
-          setCameraStatus('Monitoring Active (Vision Fallback)');
-        }
-      }
-    };
-
+    // 1. Start Webcam
     initWebcam();
-    initFaceDetector();
+
+    // 2. Load shared face detector singleton
+    let detectorCancelled = false;
+    getSharedFaceDetector()
+      .then((detector) => {
+        if (!detectorCancelled && !isUnmountedRef.current) {
+          detectorRef.current = detector;
+        }
+      })
+      .catch((err) => {
+        console.warn('Failed to load shared face detector:', err);
+        if (!detectorCancelled && !isUnmountedRef.current) {
+          setMonitoringState(ProctoringState.DETECTION_FAILED);
+          monitoringStateRef.current = ProctoringState.DETECTION_FAILED;
+        }
+      });
 
     // 3. Tab Visibility & Fullscreen Listeners
     const handleVisibilityChange = () => {
@@ -135,8 +267,8 @@ export const ProctoringBadge = ({
           details: { timestamp: new Date().toISOString() },
         }).catch(() => {});
 
-        if (onWarning) {
-          onWarning({
+        if (onWarningRef.current) {
+          onWarningRef.current({
             type: 'TAB_SWITCH',
             message: 'You navigated away or switched tabs. Tab switches are logged for instructor audit.',
           });
@@ -174,9 +306,9 @@ export const ProctoringBadge = ({
           details: { timestamp: new Date().toISOString() },
         }).catch(() => {});
 
-        if (onFullscreenWarning) onFullscreenWarning();
-        if (onWarning) {
-          onWarning({
+        if (onFullscreenWarningRef.current) onFullscreenWarningRef.current();
+        if (onWarningRef.current) {
+          onWarningRef.current({
             type: 'FULLSCREEN_EXIT',
             message: 'Fullscreen mode exited. Please stay in fullscreen during your exam.',
           });
@@ -196,35 +328,69 @@ export const ProctoringBadge = ({
     document.addEventListener('fullscreenchange', handleFullscreenChange);
 
     return () => {
-      isMounted = false;
+      isUnmountedRef.current = true;
+      detectorCancelled = true;
+
       document.removeEventListener('visibilitychange', handleVisibilityChange);
       window.removeEventListener('blur', handleWindowBlur);
       window.removeEventListener('focus', handleWindowFocus);
       document.removeEventListener('fullscreenchange', handleFullscreenChange);
 
-      if (animFrameRef.current) {
-        clearInterval(animFrameRef.current);
-      }
-      if (streamRef.current) {
-        streamRef.current.getTracks().forEach((track) => track.stop());
-      }
-      if (detectorRef.current) {
-        try {
-          detectorRef.current.close();
-        } catch {}
-      }
+      stopCameraStream();
     };
-  }, [attemptId, enableProctoring, onFullscreenWarning, onWarning]);
+  }, [attemptId, enableProctoring, initWebcam]);
 
-  // Periodic Face Detection Loop (Every 600ms)
+  // Periodic Face Detection Loop (Runs every 500ms)
   useEffect(() => {
-    if (!modelReady || !cameraActive) return;
+    if (!enableProctoring || !attemptId) return;
 
     const interval = setInterval(() => {
+      if (isUnmountedRef.current) return;
+
+      const stream = streamRef.current;
       const video = videoRef.current;
       const detector = detectorRef.current;
-      if (!video || !detector || video.readyState < 2) return;
 
+      // 1. Strict stream liveness check
+      if (!isCameraStreamLive(stream)) {
+        if (monitoringStateRef.current !== ProctoringState.CAMERA_UNAVAILABLE &&
+            monitoringStateRef.current !== ProctoringState.CAMERA_INITIALIZING) {
+          handleCameraUnavailable('Camera stopped or unavailable');
+        }
+        return;
+      }
+
+      // 2. Video element validity check
+      if (!video || video.readyState < 2 || video.videoWidth === 0 || video.videoHeight === 0) {
+        // Video element not ready with frames yet
+        if (video && (video.paused || video.ended)) {
+          handleCameraUnavailable('Camera paused or ended');
+        }
+        return;
+      }
+
+      // 3. Frozen Frame Detection
+      if (video.currentTime === lastVideoTimeRef.current) {
+        frozenFrameCountRef.current += 1;
+        if (frozenFrameCountRef.current >= 6) { // 3 seconds with zero frame advancement
+          handleCameraUnavailable('Camera feed frozen');
+          return;
+        }
+      } else {
+        frozenFrameCountRef.current = 0;
+        lastVideoTimeRef.current = video.currentTime;
+      }
+
+      // 4. Face Detector model readiness check
+      if (!detector) {
+        if (monitoringStateRef.current !== ProctoringState.CAMERA_ACTIVE_PENDING) {
+          setMonitoringState(ProctoringState.CAMERA_ACTIVE_PENDING);
+          monitoringStateRef.current = ProctoringState.CAMERA_ACTIVE_PENDING;
+        }
+        return;
+      }
+
+      // 5. Execute face detection on the live video frame
       try {
         const detections = detector.detectForVideo(video, performance.now());
         const count = detections?.detections?.length ?? 0;
@@ -232,11 +398,21 @@ export const ProctoringBadge = ({
 
         const now = Date.now();
 
-        if (count === 0) {
-          noFaceDurationRef.current += 0.6;
+        if (count === 1) {
+          // Exactly 1 face verified
+          setMonitoringState(ProctoringState.ONE_FACE);
+          monitoringStateRef.current = ProctoringState.ONE_FACE;
+          noFaceDurationRef.current = 0;
+          multiFaceDurationRef.current = 0;
+          setLastWarningMsg(null);
+        } else if (count === 0) {
+          // No face detected
+          setMonitoringState(ProctoringState.NO_FACE);
+          monitoringStateRef.current = ProctoringState.NO_FACE;
+          noFaceDurationRef.current += 0.5;
           multiFaceDurationRef.current = 0;
 
-          // Trigger NO_FACE if absent continuously for >= 5 seconds (with 15s cooldown)
+          // Trigger NO_FACE if absent continuously for >= 5s (with 15s cooldown)
           if (
             noFaceDurationRef.current >= 5 &&
             now - lastLoggedEventRef.current.NO_FACE > 15000
@@ -253,18 +429,21 @@ export const ProctoringBadge = ({
               },
             }).catch(() => {});
 
-            if (onWarning) {
-              onWarning({
+            if (onWarningRef.current) {
+              onWarningRef.current({
                 type: 'NO_FACE',
                 message: 'No face detected in webcam frame. Please ensure your face is clearly visible.',
               });
             }
           }
-        } else if (count > 1) {
-          multiFaceDurationRef.current += 0.6;
+        } else {
+          // Multiple faces (>1) detected
+          setMonitoringState(ProctoringState.MULTIPLE_FACES);
+          monitoringStateRef.current = ProctoringState.MULTIPLE_FACES;
+          multiFaceDurationRef.current += 0.5;
           noFaceDurationRef.current = 0;
 
-          // Trigger MULTIPLE_FACES if >1 face continuously for >= 3 seconds (with 15s cooldown)
+          // Trigger MULTIPLE_FACES if >1 face continuously for >= 3s (with 15s cooldown)
           if (
             multiFaceDurationRef.current >= 3 &&
             now - lastLoggedEventRef.current.MULTI_FACE > 15000
@@ -281,91 +460,133 @@ export const ProctoringBadge = ({
               },
             }).catch(() => {});
 
-            if (onWarning) {
-              onWarning({
+            if (onWarningRef.current) {
+              onWarningRef.current({
                 type: 'MULTIPLE_FACES',
                 message: `Multiple faces (${count}) detected in camera. Only the authorized examinee should be present.`,
               });
             }
           }
-        } else {
-          // Exactly 1 face - normal
-          noFaceDurationRef.current = 0;
-          multiFaceDurationRef.current = 0;
-          setLastWarningMsg(null);
         }
       } catch (err) {
-        // Suppress frame processing hiccups
+        console.warn('Face detection inference error:', err);
+        setMonitoringState(ProctoringState.DETECTION_FAILED);
+        monitoringStateRef.current = ProctoringState.DETECTION_FAILED;
+        setFaceCount(null);
       }
-    }, 600);
+    }, 500);
 
-    animFrameRef.current = interval;
+    detectionIntervalRef.current = interval;
 
     return () => {
       clearInterval(interval);
     };
-  }, [modelReady, cameraActive, attemptId, onWarning]);
+  }, [enableProctoring, attemptId, handleCameraUnavailable]);
 
-  if (!enableProctoring) return null;
+  if (!enableProctoring) {
+    return (
+      <div
+        className="card"
+        style={{
+          padding: '16px',
+          textAlign: 'center',
+          color: 'var(--gray-500)',
+          fontSize: '12px',
+          background: 'var(--gray-100)',
+          borderRadius: '10px',
+        }}
+      >
+        🔒 Camera closed (Exam completed / inactive)
+      </div>
+    );
+  }
+
+  const currentConfig =
+    monitoringState === ProctoringState.MULTIPLE_FACES
+      ? STATE_CONFIG[ProctoringState.MULTIPLE_FACES](faceCount || 2)
+      : STATE_CONFIG[monitoringState] || STATE_CONFIG[ProctoringState.CAMERA_UNAVAILABLE];
 
   return (
     <div>
-      <div className="webcam-tile" style={{ position: 'relative', overflow: 'hidden', borderRadius: '10px' }}>
-        {cameraActive ? (
-          <video
-            ref={videoRef}
-            autoPlay
-            playsInline
-            muted
-            className="webcam-video"
-            style={{ width: '100%', height: '170px', objectFit: 'cover', transform: 'scaleX(-1)' }}
-          />
-        ) : (
+      <div
+        className="webcam-tile"
+        style={{
+          position: 'relative',
+          overflow: 'hidden',
+          borderRadius: '10px',
+          height: '170px',
+          background: '#0f172a',
+          margin: 0,
+        }}
+      >
+        {/* Continuous video element that is NEVER unmounted to keep MediaStream ref stable */}
+        <video
+          ref={videoRef}
+          autoPlay
+          playsInline
+          muted
+          className="webcam-video"
+          style={{
+            width: '100%',
+            height: '100%',
+            objectFit: 'cover',
+            transform: 'scaleX(-1)',
+            display: isCameraLive ? 'block' : 'none',
+          }}
+        />
+
+        {/* Placeholder displayed when camera is not actively streaming */}
+        {!isCameraLive && (
           <div
             style={{
-              height: '170px',
+              height: '100%',
+              width: '100%',
               color: 'var(--gray-400)',
               fontSize: '12px',
-              padding: '24px',
+              padding: '16px',
               textAlign: 'center',
               display: 'flex',
+              flexDirection: 'column',
               alignItems: 'center',
               justifyContent: 'center',
+              gap: '8px',
               background: '#0f172a',
             }}
           >
-            {cameraStatus}
+            <div>{cameraStatusMsg}</div>
+            <button
+              type="button"
+              onClick={handleReconnectClick}
+              className="btn btn-secondary"
+              style={{
+                fontSize: '11px',
+                padding: '4px 10px',
+                background: 'rgba(255, 255, 255, 0.12)',
+                color: '#fff',
+                border: '1px solid rgba(255, 255, 255, 0.25)',
+                cursor: 'pointer',
+              }}
+            >
+              ↻ Reconnect Camera
+            </button>
           </div>
         )}
 
-        {/* Live Top Status Pill */}
-        <div className="webcam-badge" style={{ position: 'absolute', top: '8px', left: '8px' }}>
+        {/* Live Top Status Pill with Distinct State Colors & Labels */}
+        <div className="webcam-badge" style={{ position: 'absolute', top: '8px', left: '8px', zIndex: 2 }}>
           <span
             className="webcam-indicator-dot"
             style={{
-              background: !cameraActive
-                ? '#ef4444'
-                : faceCount === 1
-                ? '#22c55e'
-                : faceCount === 0
-                ? '#f59e0b'
-                : '#ef4444',
+              background: currentConfig.dotColor,
+              boxShadow: `0 0 6px ${currentConfig.dotColor}`,
             }}
           />
-          <span style={{ fontSize: '11px', fontWeight: '700' }}>
-            {!cameraActive
-              ? 'NO CAMERA'
-              : !modelReady
-              ? 'MONITORING ACTIVE'
-              : faceCount === 1
-              ? '1 FACE VERIFIED'
-              : faceCount === 0
-              ? 'NO FACE VISIBLE'
-              : `${faceCount} FACES DETECTED`}
+          <span style={{ fontSize: '11px', fontWeight: '700', textTransform: 'uppercase', letterSpacing: '0.3px' }}>
+            {currentConfig.label}
           </span>
         </div>
 
-        {/* Bottom Alert Pill if Anomaly */}
+        {/* Bottom Alert Pill if Anomaly Detected */}
         {lastWarningMsg && (
           <div
             style={{
@@ -373,13 +594,15 @@ export const ProctoringBadge = ({
               bottom: '6px',
               left: '6px',
               right: '6px',
-              background: 'rgba(239, 68, 68, 0.9)',
+              background: 'rgba(239, 68, 68, 0.95)',
               color: '#fff',
               fontSize: '10px',
               fontWeight: '600',
-              padding: '4px 8px',
+              padding: '5px 8px',
               borderRadius: '4px',
               textAlign: 'center',
+              zIndex: 2,
+              boxShadow: '0 2px 4px rgba(0,0,0,0.3)',
             }}
           >
             ⚠️ {lastWarningMsg}
@@ -393,3 +616,5 @@ export const ProctoringBadge = ({
     </div>
   );
 };
+
+export const ProctoringBadge = React.memo(ProctoringBadgeComponent);

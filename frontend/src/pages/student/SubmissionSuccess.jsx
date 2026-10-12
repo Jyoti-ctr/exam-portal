@@ -1,9 +1,18 @@
-import React from 'react';
+import React, { useEffect } from 'react';
 import { useLocation, Link } from 'react-router-dom';
 
 export const SubmissionSuccess = () => {
   const location = useLocation();
   const { examTitle, submittedAt, isAuto } = location.state || {};
+
+  useEffect(() => {
+    // Explicit safety assurance: shut down camera feed once submission is finalized
+    if (window.__stopExamWebcam) {
+      try {
+        window.__stopExamWebcam();
+      } catch {}
+    }
+  }, []);
 
   return (
     <div className="page-container" style={{ maxWidth: '600px', marginTop: '60px' }}>

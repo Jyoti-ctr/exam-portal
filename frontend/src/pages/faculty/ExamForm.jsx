@@ -56,13 +56,17 @@ export const ExamForm = () => {
       };
       fetchExam();
     } else {
-      // Default dates: start now, end in 7 days
+      // Default dates: start now, end in 7 days (local time for datetime-local inputs)
+      const toLocalISO = (d) => {
+        const pad = (n) => String(n).padStart(2, '0');
+        return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}T${pad(d.getHours())}:${pad(d.getMinutes())}`;
+      };
       const now = new Date();
       const in7Days = new Date(Date.now() + 7 * 24 * 60 * 60 * 1000);
       setFormData((prev) => ({
         ...prev,
-        start_window: now.toISOString().slice(0, 16),
-        end_window: in7Days.toISOString().slice(0, 16),
+        start_window: toLocalISO(now),
+        end_window: toLocalISO(in7Days),
       }));
     }
   }, [examId, isEditing]);

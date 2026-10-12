@@ -33,8 +33,6 @@ class StartOrResumeAttemptView(APIView):
 
         # Check window validity
         if now < exam.start_window:
-            print(now)
-            print(exam.start_window)
             return Response(
                 {'error': 'Exam window has not opened yet.'},
                 status=status.HTTP_400_BAD_REQUEST
