@@ -2,11 +2,12 @@ from datetime import timedelta
 from django.utils import timezone
 from django.db import transaction
 from django.shortcuts import get_object_or_404
+from django.contrib.auth import get_user_model
 from rest_framework.views import APIView
 from rest_framework import generics, status
 from rest_framework.response import Response
 from accounts.permissions import IsStudentUser, IsFacultyUser
-from exams.models import Exam, Question
+from exams.models import Exam, Question, Option
 from .models import ExamAttempt, StudentAnswer
 from .serializers import (
     ExamAttemptDetailSerializer,
@@ -15,11 +16,13 @@ from .serializers import (
 )
 from .grading import grade_mcq_attempt
 
+User = get_user_model()
+
 
 class StartOrResumeAttemptView(APIView):
     """
     POST: Begins a new attempt or resumes an active one.
-    Guarantees server-authoritative timer and prevents duplicate active attempts.
+    Guarantees server-authoritative timer, concurrency locking, and retake enforcement.
     """
     permission_classes = [IsStudentUser]
 
@@ -30,6 +33,8 @@ class StartOrResumeAttemptView(APIView):
 
         # Check window validity
         if now < exam.start_window:
+            print(now)
+            print(exam.start_window)
             return Response(
                 {'error': 'Exam window has not opened yet.'},
                 status=status.HTTP_400_BAD_REQUEST
@@ -47,56 +52,94 @@ class StartOrResumeAttemptView(APIView):
                 status=status.HTTP_403_FORBIDDEN
             )
 
-        # Check existing attempt
-        attempt = ExamAttempt.objects.filter(student=user, exam=exam).first()
+        with transaction.atomic():
+            # Concurrency lock on student user to serialize simultaneous attempt start requests
+            User.objects.select_for_update().get(id=user.id)
 
-        if attempt:
-            # Check if active
-            if attempt.status == ExamAttempt.AttemptStatus.IN_PROGRESS:
-                if attempt.is_expired:
-                    # Auto-submit expired attempt
-                    with transaction.atomic():
-                        attempt.status = ExamAttempt.AttemptStatus.EXPIRED
-                        attempt.is_completed = True
-                        attempt.submitted_at = now
-                        attempt.save()
-                        grade_mcq_attempt(attempt)
+            # Query all existing attempts for this student and exam
+            existing_attempts = list(
+                ExamAttempt.objects.select_for_update()
+                .filter(student=user, exam=exam)
+                .order_by('attempt_number')
+            )
+
+            # Check if there is an active in-progress attempt
+            active_attempt = next(
+                (att for att in existing_attempts if att.status == ExamAttempt.AttemptStatus.IN_PROGRESS),
+                None
+            )
+
+            if active_attempt:
+                # Check server deadline
+                if active_attempt.is_expired:
+                    # Auto-finalize expired attempt
+                    active_attempt.status = ExamAttempt.AttemptStatus.AUTO_SUBMITTED
+                    active_attempt.is_completed = True
+                    active_attempt.submitted_at = active_attempt.expires_at
+                    active_attempt.save()
+                    grade_mcq_attempt(active_attempt)
+
                     return Response({
                         'error': 'Your attempt has expired and was automatically submitted.',
                         'is_completed': True,
+                        'status': ExamAttempt.AttemptStatus.AUTO_SUBMITTED,
+                        'attempt_id': active_attempt.id
                     }, status=status.HTTP_400_BAD_REQUEST)
-                # Resume active attempt
-                serializer = ExamAttemptDetailSerializer(attempt)
+
+                # Return and resume active attempt (deadline is server-authoritative and unchanged)
+                serializer = ExamAttemptDetailSerializer(active_attempt)
                 return Response(serializer.data, status=status.HTTP_200_OK)
 
-            # Already submitted
-            return Response({
-                'error': 'You have already submitted this exam.',
-                'is_completed': True,
-                'submitted_at': attempt.submitted_at
-            }, status=status.HTTP_400_BAD_REQUEST)
+            # No active attempt: check retake policy
+            total_attempts = len(existing_attempts)
+            if total_attempts > 0:
+                if not exam.allow_retake or total_attempts >= exam.max_attempts:
+                    return Response({
+                        'error': f'You have reached the maximum allowed attempts ({exam.max_attempts}) for this exam. Retakes are not permitted.',
+                        'is_completed': True,
+                        'attempts_count': total_attempts,
+                        'max_attempts': exam.max_attempts
+                    }, status=status.HTTP_403_FORBIDDEN)
 
-        # Create new attempt
-        with transaction.atomic():
+            # Create new attempt with incremented attempt_number
+            next_attempt_number = total_attempts + 1
             duration_delta = timedelta(minutes=exam.duration_minutes)
-            # Deadline is either now + duration, or exam end_window (whichever comes first)
             hard_deadline = min(now + duration_delta, exam.end_window)
 
             attempt = ExamAttempt.objects.create(
                 student=user,
                 exam=exam,
-                expires_at=hard_deadline,
-                status=ExamAttempt.AttemptStatus.IN_PROGRESS
+                attempt_number=next_attempt_number,
+                status=ExamAttempt.AttemptStatus.IN_PROGRESS,
+                expires_at=hard_deadline
             )
 
-        serializer = ExamAttemptDetailSerializer(attempt)
-        return Response(serializer.data, status=status.HTTP_201_CREATED)
+            serializer = ExamAttemptDetailSerializer(attempt)
+            return Response(serializer.data, status=status.HTTP_201_CREATED)
+
+
+class StudentAttemptDetailView(generics.RetrieveAPIView):
+    """
+    GET: Retrieves attempt details for the authenticated student.
+    Ensures students can only access their own attempts.
+    """
+    permission_classes = [IsStudentUser]
+    serializer_class = ExamAttemptDetailSerializer
+
+    def get_object(self):
+        attempt_id = self.kwargs['attempt_id']
+        return get_object_or_404(
+            ExamAttempt,
+            id=attempt_id,
+            student=self.request.user
+        )
 
 
 class AutosaveAnswerView(APIView):
     """
     POST: High-speed, idempotent autosave for student answers.
-    Updates existing answer record without creating duplicates.
+    Rejects answers if attempt is submitted, auto-submitted, or past server deadline.
+    Validates that selected option belongs to the specified question.
     """
     permission_classes = [IsStudentUser]
 
@@ -119,16 +162,22 @@ class AutosaveAnswerView(APIView):
                     status=status.HTTP_404_NOT_FOUND
                 )
 
-            if attempt.is_completed or attempt.status != ExamAttempt.AttemptStatus.IN_PROGRESS:
+            # Reject answer modifications on finalized attempts
+            if attempt.is_completed or attempt.status in [
+                ExamAttempt.AttemptStatus.SUBMITTED,
+                ExamAttempt.AttemptStatus.AUTO_SUBMITTED,
+                ExamAttempt.AttemptStatus.EXPIRED,
+            ]:
                 return Response(
-                    {'error': 'Cannot save answers on a submitted or expired attempt.'},
+                    {'error': 'Cannot modify answers on a submitted or finalized attempt.'},
                     status=status.HTTP_400_BAD_REQUEST
                 )
 
+            # Check server deadline
             if now > attempt.expires_at:
-                attempt.status = ExamAttempt.AttemptStatus.EXPIRED
+                attempt.status = ExamAttempt.AttemptStatus.AUTO_SUBMITTED
                 attempt.is_completed = True
-                attempt.submitted_at = now
+                attempt.submitted_at = attempt.expires_at
                 attempt.save()
                 grade_mcq_attempt(attempt)
                 return Response(
@@ -143,6 +192,14 @@ class AutosaveAnswerView(APIView):
 
             # Ensure question belongs to this exam
             question = get_object_or_404(Question, id=question_id, exam=attempt.exam)
+
+            # Security check: Ensure option belongs to this question
+            if opt_id is not None:
+                if not Option.objects.filter(id=opt_id, question=question).exists():
+                    return Response(
+                        {'error': 'Selected option does not belong to this question.'},
+                        status=status.HTTP_400_BAD_REQUEST
+                    )
 
             # Idempotent update or create
             answer, created = StudentAnswer.objects.update_or_create(
@@ -175,15 +232,17 @@ class HeartbeatView(APIView):
 
         if attempt.status == ExamAttempt.AttemptStatus.IN_PROGRESS and now > attempt.expires_at:
             with transaction.atomic():
-                attempt.status = ExamAttempt.AttemptStatus.EXPIRED
-                attempt.is_completed = True
-                attempt.submitted_at = now
-                attempt.save()
-                grade_mcq_attempt(attempt)
+                attempt = ExamAttempt.objects.select_for_update().get(id=attempt.id)
+                if not attempt.is_completed:
+                    attempt.status = ExamAttempt.AttemptStatus.AUTO_SUBMITTED
+                    attempt.is_completed = True
+                    attempt.submitted_at = attempt.expires_at
+                    attempt.save()
+                    grade_mcq_attempt(attempt)
             return Response({
                 'status': 'expired',
                 'remaining_seconds': 0,
-                'message': 'Exam time expired and attempt was submitted.'
+                'message': 'Exam time expired and attempt was automatically submitted.'
             })
 
         return Response({
@@ -195,7 +254,7 @@ class HeartbeatView(APIView):
 class SubmitAttemptView(APIView):
     """
     POST: Finalizes attempt submission and triggers automatic MCQ grading.
-    Guarded against duplicate submissions.
+    Guarded against duplicate submissions; idempotent.
     """
     permission_classes = [IsStudentUser]
 
@@ -208,22 +267,29 @@ class SubmitAttemptView(APIView):
 
             if not attempt:
                 return Response(
-                    {'error': 'Attempt not found.'},
+                    {'error': 'Attempt not found or unauthorized.'},
                     status=status.HTTP_404_NOT_FOUND
                 )
 
-            # Idempotent response if already submitted
+            # Idempotent response if already submitted / finalized
             if attempt.is_completed:
                 return Response({
                     'status': 'already_submitted',
                     'message': 'This attempt was already submitted.',
+                    'attempt_status': attempt.status,
                     'submitted_at': attempt.submitted_at
                 }, status=status.HTTP_200_OK)
 
             now = timezone.now()
-            attempt.status = ExamAttempt.AttemptStatus.SUBMITTED
+            # If submitted past deadline, classify as AUTO_SUBMITTED
+            if now > attempt.expires_at:
+                attempt.status = ExamAttempt.AttemptStatus.AUTO_SUBMITTED
+                attempt.submitted_at = attempt.expires_at
+            else:
+                attempt.status = ExamAttempt.AttemptStatus.SUBMITTED
+                attempt.submitted_at = now
+
             attempt.is_completed = True
-            attempt.submitted_at = now
             attempt.save()
 
             # Execute grading
@@ -231,6 +297,7 @@ class SubmitAttemptView(APIView):
 
         return Response({
             'status': 'submitted',
+            'attempt_status': attempt.status,
             'message': 'Your exam has been submitted successfully.',
             'submitted_at': attempt.submitted_at
         }, status=status.HTTP_200_OK)
@@ -249,4 +316,4 @@ class FacultyExamAttemptsView(generics.ListAPIView):
         # Verify ownership or superuser
         if not self.request.user.is_superuser and exam.creator != self.request.user:
             return ExamAttempt.objects.none()
-        return exam.attempts.select_related('student', 'exam').prefetch_related('answers')
+        return exam.attempts.select_related('student', 'exam').prefetch_related('answers').order_by('student_id', 'attempt_number')

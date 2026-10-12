@@ -9,9 +9,11 @@ class ExamAttempt(models.Model):
     Start time, remaining time, and deadline are strictly server-authoritative.
     """
     class AttemptStatus(models.TextChoices):
+        NOT_STARTED = 'NOT_STARTED', 'Not Started'
         IN_PROGRESS = 'IN_PROGRESS', 'In Progress'
         SUBMITTED = 'SUBMITTED', 'Submitted'
-        EXPIRED = 'EXPIRED', 'Expired (Auto-Submitted)'
+        AUTO_SUBMITTED = 'AUTO_SUBMITTED', 'Auto-Submitted (Expired)'
+        EXPIRED = 'EXPIRED', 'Expired'
 
     student = models.ForeignKey(
         settings.AUTH_USER_MODEL,
@@ -22,6 +24,10 @@ class ExamAttempt(models.Model):
         'exams.Exam',
         on_delete=models.CASCADE,
         related_name='attempts'
+    )
+    attempt_number = models.PositiveIntegerField(
+        default=1,
+        help_text="1-based sequence number for the student attempt"
     )
     status = models.CharField(
         max_length=20,
@@ -40,6 +46,12 @@ class ExamAttempt(models.Model):
         indexes = [
             models.Index(fields=['student', 'exam', 'status']),
             models.Index(fields=['expires_at']),
+        ]
+        constraints = [
+            models.UniqueConstraint(
+                fields=['student', 'exam', 'attempt_number'],
+                name='unique_attempt_per_student_exam_number'
+            )
         ]
 
     @property

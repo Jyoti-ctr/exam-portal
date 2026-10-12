@@ -58,18 +58,23 @@ export const StudentDashboard = () => {
         ) : (
           <div className="grid-3">
             {exams.map((exam) => {
-              const isSubmitted = exam.attempt_status === 'SUBMITTED' || exam.attempt_status === 'EXPIRED';
               const isInProgress = exam.attempt_status === 'IN_PROGRESS';
+              const canAttempt = exam.can_attempt !== undefined ? exam.can_attempt : !exam.has_attempt;
+              const attemptsCount = exam.attempts_count || (exam.has_attempt ? 1 : 0);
+              const maxAttempts = exam.max_attempts || 1;
+              const isCompleted = !canAttempt && attemptsCount > 0;
 
               return (
                 <div key={exam.id} className="card" style={{ display: 'flex', flexDirection: 'column', justifyContent: 'space-between' }}>
                   <div>
                     <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: '12px' }}>
                       <span className="badge badge-neutral">{exam.duration_minutes} Mins</span>
-                      {isSubmitted ? (
-                        <span className="badge badge-success">Completed</span>
-                      ) : isInProgress ? (
+                      {isInProgress ? (
                         <span className="badge badge-warning">In Progress</span>
+                      ) : isCompleted ? (
+                        <span className="badge badge-success">Completed ({attemptsCount}/{maxAttempts})</span>
+                      ) : attemptsCount > 0 && canAttempt ? (
+                        <span className="badge badge-warning" style={{ background: '#fef3c7', color: '#b45309' }}>Retake Available ({attemptsCount}/{maxAttempts})</span>
                       ) : (
                         <span className="badge badge-neutral">Available</span>
                       )}
@@ -84,19 +89,24 @@ export const StudentDashboard = () => {
 
                     <div style={{ fontSize: '12px', color: 'var(--gray-500)', display: 'flex', flexDirection: 'column', gap: '4px', marginBottom: '20px' }}>
                       <div>Total Marks: <strong>{exam.total_marks}</strong> (Pass: {exam.pass_marks})</div>
+                      <div>Attempts Allowed: <strong>{maxAttempts}</strong> {exam.allow_retake ? '(Retakes permitted)' : '(Single attempt only)'}</div>
                       <div>Proctoring: <strong>{exam.enable_proctoring ? 'Enabled (Webcam & Tabs)' : 'Standard'}</strong></div>
                       <div>Window Closes: {new Date(exam.end_window).toLocaleString()}</div>
                     </div>
                   </div>
 
                   <div>
-                    {isSubmitted ? (
+                    {isInProgress ? (
+                      <Link to={`/exam/take/${exam.id}`} className="btn btn-warning" style={{ width: '100%', background: '#d97706', color: '#fff' }}>
+                        Resume Active Attempt ➜
+                      </Link>
+                    ) : isCompleted ? (
                       <Link to={`/student/results`} className="btn btn-secondary" style={{ width: '100%' }}>
                         View Result Status
                       </Link>
-                    ) : isInProgress ? (
-                      <Link to={`/exam/take/${exam.id}`} className="btn btn-warning" style={{ width: '100%', background: '#d97706', color: '#fff' }}>
-                        Resume Active Attempt ➜
+                    ) : attemptsCount > 0 && canAttempt ? (
+                      <Link to={`/student/exams/${exam.id}/instructions`} className="btn btn-primary" style={{ width: '100%' }}>
+                        Start Retake #{attemptsCount + 1} ➜
                       </Link>
                     ) : (
                       <Link to={`/student/exams/${exam.id}/instructions`} className="btn btn-primary" style={{ width: '100%' }}>

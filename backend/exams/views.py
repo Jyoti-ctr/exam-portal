@@ -61,10 +61,23 @@ class FacultyExamViewSet(viewsets.ModelViewSet):
 class FacultyQuestionViewSet(viewsets.ModelViewSet):
     """
     CRUD for individual questions & MCQ choices.
+    Enforces object-level security: faculty can only access/modify questions for their own exams.
     """
     permission_classes = [IsFacultyUser]
     serializer_class = QuestionFacultySerializer
-    queryset = Question.objects.all().prefetch_related('options')
+
+    def get_queryset(self):
+        user = self.request.user
+        if user.is_superuser:
+            return Question.objects.all().prefetch_related('options')
+        return Question.objects.filter(exam__creator=user).prefetch_related('options')
+
+    def perform_create(self, serializer):
+        exam = serializer.validated_data.get('exam')
+        if exam and not self.request.user.is_superuser and exam.creator != self.request.user:
+            from rest_framework.exceptions import PermissionDenied
+            raise PermissionDenied("You cannot add questions to an exam you do not own.")
+        serializer.save()
 
 
 # ==========================================

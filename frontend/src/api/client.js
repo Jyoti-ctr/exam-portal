@@ -55,6 +55,7 @@ export const studentAPI = {
   heartbeat: (attemptId) => api.post(`/student/attempts/${attemptId}/heartbeat/`),
   submitAttempt: (attemptId) => api.post(`/student/attempts/${attemptId}/submit/`),
   logProctoringEvent: (payload) => api.post('/student/events/', payload),
+  getAttemptDetails: (attemptId) => api.get(`/student/attempts/${attemptId}/`),
   getAttemptResult: (attemptId) => api.get(`/student/results/${attemptId}/`),
   getPublishedResults: () => api.get('/student/results/'),
 };
@@ -74,11 +75,15 @@ export const facultyAPI = {
 
   getAttempts: (examId) => api.get(`/faculty/exams/${examId}/attempts/`),
   getProctoringEvents: (attemptId) => api.get(`/faculty/attempts/${attemptId}/events/`),
-  reviewProctoringEvent: (eventId, notes) => api.patch(`/faculty/events/${eventId}/review/`, { is_reviewed: true, reviewer_notes: notes }),
+  getAttemptAnalysis: (attemptId) => api.get(`/faculty/attempts/${attemptId}/analysis/`),
+  bulkReviewIncident: (attemptId, payload) => api.post(`/faculty/attempts/${attemptId}/bulk-review/`, payload),
+  reviewProctoringEvent: (eventId, reviewStatus = 'REVIEWED', notes = '') =>
+    api.patch(`/faculty/events/${eventId}/review/`, { review_status: reviewStatus, reviewer_notes: notes, is_reviewed: true }),
 
   getResults: (examId) => api.get(`/faculty/exams/${examId}/results/`),
   evaluateAnswer: (payload) => api.post('/faculty/results/evaluate-answer/', payload),
   publishResults: (examId, isPublished) => api.post(`/faculty/exams/${examId}/publish-results/`, { is_published: isPublished }),
 };
+
 
 export default api;

@@ -13,9 +13,17 @@ class ProctoringEvent(models.Model):
         FULLSCREEN_ENTER = 'FULLSCREEN_ENTER', 'Entered Fullscreen Mode'
         CAMERA_DISCONNECTED = 'CAMERA_DISCONNECTED', 'Camera Feed Lost or Blocked'
         CAMERA_RECONNECTED = 'CAMERA_RECONNECTED', 'Camera Feed Restored'
+        NO_FACE_DETECTED = 'NO_FACE_DETECTED', 'No Face Detected in Frame'
+        MULTIPLE_FACES_DETECTED = 'MULTIPLE_FACES_DETECTED', 'Multiple Faces Detected in Frame'
         DEVTOOLS_DETECTED = 'DEVTOOLS_DETECTED', 'Browser Developer Tools Opened'
         NETWORK_OFFLINE = 'NETWORK_OFFLINE', 'Network Connection Lost'
         NETWORK_ONLINE = 'NETWORK_ONLINE', 'Network Connection Restored'
+
+    class ReviewStatus(models.TextChoices):
+        PENDING = 'PENDING', 'Pending Review'
+        REVIEWED = 'REVIEWED', 'Reviewed'
+        DISMISSED = 'DISMISSED', 'Dismissed'
+        FOLLOW_UP = 'FOLLOW_UP', 'Requires Follow-up'
 
     attempt = models.ForeignKey(
         'attempts.ExamAttempt',
@@ -33,6 +41,11 @@ class ProctoringEvent(models.Model):
         help_text="Contextual details such as duration outside fullscreen, device info, etc."
     )
     is_reviewed = models.BooleanField(default=False)
+    review_status = models.CharField(
+        max_length=20,
+        choices=ReviewStatus.choices,
+        default=ReviewStatus.PENDING
+    )
     reviewer_notes = models.TextField(blank=True)
 
     class Meta:

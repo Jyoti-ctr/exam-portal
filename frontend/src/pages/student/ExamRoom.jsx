@@ -18,9 +18,11 @@ export const ExamRoom = () => {
   const [answers, setAnswers] = useState({});
   const [saveStatus, setSaveStatus] = useState('All changes saved');
 
-  // UI Modals & Flags
+  // UI Modals, Warnings & Flags
   const [showSubmitModal, setShowSubmitModal] = useState(false);
   const [showFullscreenModal, setShowFullscreenModal] = useState(false);
+  const [activeWarning, setActiveWarning] = useState(null);
+  const [warningsCount, setWarningsCount] = useState(0);
   const [loading, setLoading] = useState(true);
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState(null);
@@ -35,6 +37,19 @@ export const ExamRoom = () => {
         if (!isMounted) return;
 
         const attemptData = res.data;
+
+        // If attempt is already completed or expired, redirect to submitted page
+        if (attemptData.is_completed) {
+          navigate('/student/submitted', {
+            state: {
+              examTitle: attemptData.exam_title,
+              submittedAt: attemptData.submitted_at || new Date().toLocaleTimeString(),
+              isAuto: attemptData.status === 'AUTO_SUBMITTED' || attemptData.status === 'EXPIRED',
+            },
+          });
+          return;
+        }
+
         setAttempt(attemptData);
         setQuestions(attemptData.questions || []);
 
@@ -49,13 +64,15 @@ export const ExamRoom = () => {
         });
         setAnswers(initialMap);
 
-        // Request fullscreen on start
-        try {
-          if (!document.fullscreenElement) {
-            document.documentElement.requestFullscreen().catch(() => {});
+        // Request fullscreen on start if exam requires proctoring
+        if (attemptData.enable_proctoring) {
+          try {
+            if (!document.fullscreenElement) {
+              document.documentElement.requestFullscreen().catch(() => {});
+            }
+          } catch {
+            // Ignore auto-request rejection if browser policies require user gesture
           }
-        } catch {
-          // Ignore fullscreen rejection if browser blocks auto-request
         }
       } catch (err) {
         if (!isMounted) return;
@@ -71,9 +88,25 @@ export const ExamRoom = () => {
     return () => {
       isMounted = false;
     };
-  }, [examId]);
+  }, [examId, navigate]);
 
-  // Periodic heartbeat sync (every 30 seconds)
+  // Window beforeunload guard to protect in-flight responses
+  useEffect(() => {
+    const handleBeforeUnload = (e) => {
+      if (attempt?.id && !attempt?.is_completed) {
+        e.preventDefault();
+        e.returnValue = 'You have an active exam attempt in progress. Leaving this page may record an integrity event.';
+        return e.returnValue;
+      }
+    };
+
+    window.addEventListener('beforeunload', handleBeforeUnload);
+    return () => {
+      window.removeEventListener('beforeunload', handleBeforeUnload);
+    };
+  }, [attempt?.id, attempt?.is_completed]);
+
+  // Periodic heartbeat sync (every 25 seconds) to enforce server-authoritative timer
   useEffect(() => {
     if (!attempt?.id || attempt.is_completed) return;
 
@@ -86,14 +119,14 @@ export const ExamRoom = () => {
       } catch {
         // Heartbeat failure handled gracefully
       }
-    }, 30000);
+    }, 25000);
 
     return () => clearInterval(interval);
   }, [attempt?.id, attempt?.is_completed]);
 
   // Autosave function
   const triggerAutosave = useCallback(async (qId, optionId, text, isMarked) => {
-    if (!attempt?.id) return;
+    if (!attempt?.id || attempt.is_completed) return;
     setSaveStatus('Saving answer...');
 
     try {
@@ -106,20 +139,32 @@ export const ExamRoom = () => {
       const timeStr = new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' });
       setSaveStatus(`Saved at ${timeStr}`);
     } catch (err) {
-      if (err.response?.data?.error?.includes('expired')) {
+      if (err.response?.data?.error?.includes('expired') || err.response?.data?.error?.includes('submitted')) {
         handleAutoSubmit();
       } else {
-        setSaveStatus('⚠️ Save error. Retrying...');
+        setSaveStatus('⚠️ Connection glitch. Retrying...');
       }
     }
-  }, [attempt?.id]);
+  }, [attempt?.id, attempt?.is_completed]);
+
+  // Handle incoming proctoring warnings (e.g. tab switches, multiple faces)
+  const handleProctoringWarning = useCallback((warning) => {
+    setWarningsCount((prev) => prev + 1);
+    setActiveWarning(warning);
+
+    // Auto-dismiss warning banner after 8 seconds
+    setTimeout(() => {
+      setActiveWarning((current) => (current === warning ? null : current));
+    }, 8000);
+  }, []);
 
   // Current Question Helpers
   const currentQ = questions[currentIndex] || null;
   const currentAnswer = currentQ ? answers[currentQ.id] || {} : {};
+  const isReadOnly = attempt?.is_completed || submitting;
 
   const handleSelectOption = (optionId) => {
-    if (!currentQ) return;
+    if (!currentQ || isReadOnly) return;
     const updated = {
       ...currentAnswer,
       selected_option_id: optionId,
@@ -129,7 +174,7 @@ export const ExamRoom = () => {
   };
 
   const handleTextChange = (e) => {
-    if (!currentQ) return;
+    if (!currentQ || isReadOnly) return;
     const text = e.target.value;
     const updated = {
       ...currentAnswer,
@@ -139,12 +184,12 @@ export const ExamRoom = () => {
   };
 
   const handleTextBlur = () => {
-    if (!currentQ) return;
+    if (!currentQ || isReadOnly) return;
     triggerAutosave(currentQ.id, currentAnswer.selected_option_id, currentAnswer.text_response, currentAnswer.is_marked_for_review);
   };
 
   const handleToggleReview = () => {
-    if (!currentQ) return;
+    if (!currentQ || isReadOnly) return;
     const newMarked = !currentAnswer.is_marked_for_review;
     const updated = {
       ...currentAnswer,
@@ -155,7 +200,7 @@ export const ExamRoom = () => {
   };
 
   const handleClearSelection = () => {
-    if (!currentQ) return;
+    if (!currentQ || isReadOnly) return;
     const updated = {
       ...currentAnswer,
       selected_option_id: null,
@@ -187,8 +232,19 @@ export const ExamRoom = () => {
         },
       });
     } catch (err) {
-      alert('Error submitting exam. Please check your connection.');
-      setSubmitting(false);
+      // Even if network glitches, attempt might already be finalized
+      if (err.response?.data?.status === 'already_submitted') {
+        navigate('/student/submitted', {
+          state: {
+            examTitle: attempt.exam_title,
+            submittedAt: new Date().toLocaleTimeString(),
+            isAuto,
+          },
+        });
+      } else {
+        alert('Error submitting exam. Please check your network connection.');
+        setSubmitting(false);
+      }
     }
   };
 
@@ -225,11 +281,42 @@ export const ExamRoom = () => {
 
   return (
     <div style={{ display: 'flex', flexDirection: 'column', minHeight: '100vh', background: 'var(--gray-50)' }}>
+      {/* Top Persistent Warning Toast / Banner if Anomaly Detected */}
+      {activeWarning && (
+        <div
+          style={{
+            background: '#fee2e2',
+            borderBottom: '1px solid #ef4444',
+            color: '#b91c1c',
+            padding: '10px 20px',
+            fontSize: '13px',
+            fontWeight: '600',
+            display: 'flex',
+            justifyContent: 'space-between',
+            alignItems: 'center',
+            position: 'sticky',
+            top: 0,
+            zIndex: 100,
+          }}
+        >
+          <div style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
+            <span>⚠️</span>
+            <span>{activeWarning.message}</span>
+          </div>
+          <button
+            onClick={() => setActiveWarning(null)}
+            style={{ background: 'none', border: 'none', color: '#b91c1c', cursor: 'pointer', fontWeight: 'bold' }}
+          >
+            ✕
+          </button>
+        </div>
+      )}
+
       {/* Top Header */}
       <header className="exam-room-header">
         <div>
           <span style={{ fontSize: '11px', fontWeight: '700', color: 'var(--primary)', letterSpacing: '0.5px' }}>
-            ONLINE EXAMINATION
+            ONLINE EXAMINATION • ATTEMPT #{attempt.attempt_number || 1}
           </span>
           <h1 style={{ fontSize: '18px', fontWeight: '800', color: 'var(--gray-900)', margin: '2px 0 0 0' }}>
             {attempt.exam_title}
@@ -237,6 +324,21 @@ export const ExamRoom = () => {
         </div>
 
         <div style={{ display: 'flex', alignItems: 'center', gap: '16px' }}>
+          {warningsCount > 0 && (
+            <span
+              style={{
+                fontSize: '12px',
+                fontWeight: '700',
+                color: '#b91c1c',
+                background: '#fee2e2',
+                padding: '4px 10px',
+                borderRadius: '12px',
+              }}
+            >
+              Audited Warnings: {warningsCount}
+            </span>
+          )}
+
           <span style={{ fontSize: '13px', color: 'var(--gray-500)', fontStyle: 'italic' }}>
             {saveStatus}
           </span>
@@ -250,8 +352,9 @@ export const ExamRoom = () => {
             onClick={() => setShowSubmitModal(true)}
             className="btn btn-primary"
             style={{ fontWeight: '700' }}
+            disabled={isReadOnly}
           >
-            Finish Exam
+            {submitting ? 'Submitting...' : 'Finish Exam'}
           </button>
         </div>
       </header>
@@ -293,14 +396,16 @@ export const ExamRoom = () => {
                     return (
                       <div
                         key={opt.id}
-                        onClick={() => handleSelectOption(opt.id)}
+                        onClick={() => !isReadOnly && handleSelectOption(opt.id)}
                         className={`option-choice ${isSelected ? 'selected' : ''}`}
+                        style={{ cursor: isReadOnly ? 'not-allowed' : 'pointer' }}
                       >
                         <input
                           type="radio"
                           name={`q_${currentQ.id}`}
                           checked={isSelected}
-                          onChange={() => handleSelectOption(opt.id)}
+                          onChange={() => !isReadOnly && handleSelectOption(opt.id)}
+                          disabled={isReadOnly}
                           className="option-radio"
                         />
                         <span>{opt.option_text}</span>
@@ -318,6 +423,7 @@ export const ExamRoom = () => {
                     value={currentAnswer.text_response || ''}
                     onChange={handleTextChange}
                     onBlur={handleTextBlur}
+                    disabled={isReadOnly}
                     placeholder="Type your explanation here..."
                   />
                 </div>
@@ -329,6 +435,7 @@ export const ExamRoom = () => {
                   <button
                     type="button"
                     onClick={handleToggleReview}
+                    disabled={isReadOnly}
                     className={`btn ${currentAnswer.is_marked_for_review ? 'btn-danger' : 'btn-secondary'}`}
                   >
                     {currentAnswer.is_marked_for_review ? '★ Unmark Review' : '☆ Mark for Review'}
@@ -336,6 +443,7 @@ export const ExamRoom = () => {
                   <button
                     type="button"
                     onClick={handleClearSelection}
+                    disabled={isReadOnly}
                     className="btn btn-secondary"
                   >
                     Clear Choice
@@ -412,11 +520,12 @@ export const ExamRoom = () => {
             </div>
           </div>
 
-          {/* Transparent Webcam & Audit Tile */}
+          {/* Transparent Webcam & Face Detection Module */}
           <ProctoringBadge
             attemptId={attempt.id}
             enableProctoring={attempt.enable_proctoring}
             onFullscreenWarning={() => setShowFullscreenModal(true)}
+            onWarning={handleProctoringWarning}
           />
         </div>
       </div>

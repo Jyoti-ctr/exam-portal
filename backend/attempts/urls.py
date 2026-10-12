@@ -1,6 +1,7 @@
 from django.urls import path
 from .views import (
     StartOrResumeAttemptView,
+    StudentAttemptDetailView,
     AutosaveAnswerView,
     HeartbeatView,
     SubmitAttemptView,
@@ -10,6 +11,7 @@ from .views import (
 urlpatterns = [
     # Student attempt actions
     path('student/exams/<int:exam_id>/start/', StartOrResumeAttemptView.as_view(), name='attempt-start-resume'),
+    path('student/attempts/<int:attempt_id>/', StudentAttemptDetailView.as_view(), name='attempt-detail'),
     path('student/attempts/<int:attempt_id>/autosave/', AutosaveAnswerView.as_view(), name='attempt-autosave'),
     path('student/attempts/<int:attempt_id>/heartbeat/', HeartbeatView.as_view(), name='attempt-heartbeat'),
     path('student/attempts/<int:attempt_id>/submit/', SubmitAttemptView.as_view(), name='attempt-submit'),

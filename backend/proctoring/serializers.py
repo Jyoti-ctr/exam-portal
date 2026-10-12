@@ -5,6 +5,7 @@ from attempts.models import ExamAttempt
 
 class ProctoringEventSerializer(serializers.ModelSerializer):
     event_type_display = serializers.CharField(source='get_event_type_display', read_only=True)
+    review_status_display = serializers.CharField(source='get_review_status_display', read_only=True)
 
     class Meta:
         model = ProctoringEvent
@@ -16,6 +17,8 @@ class ProctoringEventSerializer(serializers.ModelSerializer):
             'timestamp',
             'details',
             'is_reviewed',
+            'review_status',
+            'review_status_display',
             'reviewer_notes',
         ]
         read_only_fields = ['id', 'timestamp']

@@ -66,6 +66,7 @@ export const QuestionManager = () => {
     if (!newQText.trim()) return;
 
     const payload = {
+      exam: parseInt(examId, 10),
       question_text: newQText,
       question_type: newQType,
       marks: newQMarks,
@@ -97,10 +98,20 @@ export const QuestionManager = () => {
         { option_text: '', is_correct: false, order: 4 },
       ]);
       loadData();
-    } catch {
-      alert('Failed to create question.');
+    } catch (err) {
+      const errorData = err.response?.data;
+      let msg = 'Failed to create question.';
+      if (errorData && typeof errorData === 'object') {
+        msg = Object.entries(errorData)
+          .map(([k, v]) => `${k}: ${Array.isArray(v) ? v.join(', ') : v}`)
+          .join('\n');
+      } else if (typeof errorData === 'string') {
+        msg = errorData;
+      }
+      alert(`Error creating question:\n${msg}`);
     }
   };
+
 
   const handleDeleteQuestion = async () => {
     if (!deleteQId) return;

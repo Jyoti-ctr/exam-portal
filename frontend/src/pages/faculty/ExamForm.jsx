@@ -13,6 +13,8 @@ export const ExamForm = () => {
     duration_minutes: 60,
     total_marks: 50.0,
     pass_marks: 20.0,
+    max_attempts: 1,
+    allow_retake: false,
     start_window: '',
     end_window: '',
     shuffle_questions: false,
@@ -37,6 +39,8 @@ export const ExamForm = () => {
             duration_minutes: data.duration_minutes,
             total_marks: data.total_marks,
             pass_marks: data.pass_marks,
+            max_attempts: data.max_attempts || 1,
+            allow_retake: !!data.allow_retake,
             start_window: data.start_window ? data.start_window.slice(0, 16) : '',
             end_window: data.end_window ? data.end_window.slice(0, 16) : '',
             shuffle_questions: data.shuffle_questions,
@@ -208,8 +212,31 @@ export const ExamForm = () => {
 
           <div style={{ background: 'var(--gray-50)', padding: '16px', borderRadius: '8px', border: '1px solid var(--gray-200)', margin: '16px 0 24px 0', display: 'flex', flexDirection: 'column', gap: '12px' }}>
             <h4 style={{ fontSize: '14px', fontWeight: '700', color: 'var(--gray-900)' }}>
-              Integrity & Anti-Cheating Settings
+              Integrity & Retake Policy Settings
             </h4>
+            <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '16px', alignItems: 'center' }}>
+              <div className="form-group" style={{ margin: 0 }}>
+                <label className="form-label">Maximum Attempts Allowed *</label>
+                <input
+                  type="number"
+                  min="1"
+                  max="10"
+                  name="max_attempts"
+                  className="form-control"
+                  value={formData.max_attempts}
+                  onChange={handleChange}
+                />
+              </div>
+              <label className="form-check" style={{ marginTop: '22px' }}>
+                <input
+                  type="checkbox"
+                  name="allow_retake"
+                  checked={formData.allow_retake}
+                  onChange={handleChange}
+                />
+                <span><strong>Allow Exam Retakes:</strong> Permit multiple attempts up to the maximum limit</span>
+              </label>
+            </div>
             <label className="form-check">
               <input
                 type="checkbox"
@@ -217,7 +244,7 @@ export const ExamForm = () => {
                 checked={formData.enable_proctoring}
                 onChange={handleChange}
               />
-              <span><strong>Enable Proctoring Signals:</strong> Request webcam permission and log tab blur / fullscreen exits</span>
+              <span><strong>Enable Proctoring Signals:</strong> Request webcam permission, face counting, and log tab/fullscreen exits</span>
             </label>
             <label className="form-check">
               <input

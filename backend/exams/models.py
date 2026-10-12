@@ -36,6 +36,14 @@ class Exam(models.Model):
         default=True,
         help_text="Require camera permission and track browser visibility changes"
     )
+    max_attempts = models.PositiveIntegerField(
+        default=1,
+        help_text="Maximum allowed attempts per student for this exam"
+    )
+    allow_retake = models.BooleanField(
+        default=False,
+        help_text="Whether retakes are permitted when student has remaining attempts"
+    )
     is_published = models.BooleanField(
         default=False,
         help_text="When False, students cannot view or start this exam"

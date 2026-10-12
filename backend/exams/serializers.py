@@ -27,6 +27,9 @@ class QuestionFacultySerializer(serializers.ModelSerializer):
             'order',
             'options',
         ]
+        extra_kwargs = {
+            'exam': {'required': False}
+        }
 
     def create(self, validated_data):
         options_data = validated_data.pop('options', [])
@@ -64,6 +67,8 @@ class ExamFacultySerializer(serializers.ModelSerializer):
             'pass_marks',
             'start_window',
             'end_window',
+            'max_attempts',
+            'allow_retake',
             'shuffle_questions',
             'shuffle_options',
             'enable_proctoring',
@@ -116,6 +121,9 @@ class QuestionStudentSerializer(serializers.ModelSerializer):
 class ExamStudentSerializer(serializers.ModelSerializer):
     has_attempt = serializers.SerializerMethodField()
     attempt_status = serializers.SerializerMethodField()
+    attempts_count = serializers.SerializerMethodField()
+    can_attempt = serializers.SerializerMethodField()
+    active_attempt_id = serializers.SerializerMethodField()
 
     class Meta:
         model = Exam
@@ -128,20 +136,49 @@ class ExamStudentSerializer(serializers.ModelSerializer):
             'pass_marks',
             'start_window',
             'end_window',
+            'max_attempts',
+            'allow_retake',
             'enable_proctoring',
             'has_attempt',
             'attempt_status',
+            'attempts_count',
+            'can_attempt',
+            'active_attempt_id',
         ]
 
-    def get_has_attempt(self, obj):
+    def get_attempts_count(self, obj):
         request = self.context.get('request')
         if not request or not request.user.is_authenticated:
-            return False
-        return obj.attempts.filter(student=request.user).exists()
+            return 0
+        return obj.attempts.filter(student=request.user).count()
+
+    def get_has_attempt(self, obj):
+        return self.get_attempts_count(obj) > 0
 
     def get_attempt_status(self, obj):
         request = self.context.get('request')
         if not request or not request.user.is_authenticated:
             return None
-        attempt = obj.attempts.filter(student=request.user).first()
+        attempt = obj.attempts.filter(student=request.user).order_by('-started_at').first()
         return attempt.status if attempt else None
+
+    def get_active_attempt_id(self, obj):
+        request = self.context.get('request')
+        if not request or not request.user.is_authenticated:
+            return None
+        from attempts.models import ExamAttempt
+        active = obj.attempts.filter(student=request.user, status=ExamAttempt.AttemptStatus.IN_PROGRESS).first()
+        return active.id if active else None
+
+    def get_can_attempt(self, obj):
+        request = self.context.get('request')
+        if not request or not request.user.is_authenticated:
+            return False
+        from attempts.models import ExamAttempt
+        if obj.attempts.filter(student=request.user, status=ExamAttempt.AttemptStatus.IN_PROGRESS).exists():
+            return True
+        count = self.get_attempts_count(obj)
+        if count == 0:
+            return True
+        return obj.allow_retake and count < obj.max_attempts
+

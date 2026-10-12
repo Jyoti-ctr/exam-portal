@@ -25,5 +25,6 @@ urlpatterns = [
     path('api/v1/', include('exams.urls')),
     path('api/v1/', include('attempts.urls')),
     path('api/v1/', include('proctoring.urls')),
+    path('api/v1/proctoring/', include('proctoring.urls')),
     path('api/v1/', include('results.urls')),
 ]
