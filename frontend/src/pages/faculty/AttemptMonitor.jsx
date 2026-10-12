@@ -142,9 +142,14 @@ export const AttemptMonitor = () => {
           </p>
         </div>
 
-        <button onClick={loadData} className="btn btn-secondary btn-sm">
-          Refresh Live Status
-        </button>
+        <div style={{ display: 'flex', gap: '8px' }}>
+          <Link to={`/faculty/exams/${examId}/results`} className="btn btn-primary btn-sm">
+            Marking & Reviews 📝
+          </Link>
+          <button onClick={loadData} className="btn btn-secondary btn-sm">
+            Refresh Live Status
+          </button>
+        </div>
       </div>
 
       <div className="card" style={{ padding: '0', overflow: 'hidden' }}>
@@ -200,16 +205,24 @@ export const AttemptMonitor = () => {
                       <strong>{(att.saved_answers || []).length}</strong> responses saved
                     </td>
                     <td>
-                      <button
-                        onClick={() => handleOpenReview(att.id)}
-                        className="btn btn-secondary btn-sm"
-                        style={{ display: 'inline-flex', alignItems: 'center', gap: '6px' }}
-                      >
-                        <span>Review Signals</span>
-                        <span style={{ fontSize: '11px', background: 'var(--primary)', color: '#fff', padding: '1px 6px', borderRadius: '10px' }}>
-                          AI Audit 📋
-                        </span>
-                      </button>
+                      <div style={{ display: 'flex', gap: '6px' }}>
+                        <button
+                          onClick={() => handleOpenReview(att.id)}
+                          className="btn btn-secondary btn-sm"
+                          style={{ display: 'inline-flex', alignItems: 'center', gap: '6px' }}
+                        >
+                          <span>Review Signals</span>
+                          <span style={{ fontSize: '11px', background: 'var(--primary)', color: '#fff', padding: '1px 6px', borderRadius: '10px' }}>
+                            AI Audit 📋
+                          </span>
+                        </button>
+                        <Link
+                          to={`/faculty/exams/${examId}/results`}
+                          className="btn btn-primary btn-sm"
+                        >
+                          Grade ✍️
+                        </Link>
+                      </div>
                     </td>
                   </tr>
                 ))}

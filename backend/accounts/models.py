@@ -10,6 +10,10 @@ class User(AbstractUser):
         STUDENT = 'STUDENT', 'Student'
         FACULTY = 'FACULTY', 'Faculty/Admin'
 
+    email = models.EmailField(
+        unique=True,
+        help_text="Required unique email address for all student and faculty accounts"
+    )
     role = models.CharField(
         max_length=10,
         choices=Role.choices,

@@ -27,4 +27,5 @@ urlpatterns = [
     path('api/v1/', include('proctoring.urls')),
     path('api/v1/proctoring/', include('proctoring.urls')),
     path('api/v1/', include('results.urls')),
+    path('api/v1/results/', include('results.urls')),
 ]

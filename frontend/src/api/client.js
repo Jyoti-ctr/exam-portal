@@ -43,6 +43,7 @@ api.interceptors.response.use(
 
 export const authAPI = {
   login: (credentials) => api.post('/auth/login/', credentials),
+  register: (studentData) => api.post('/auth/register/', studentData),
   logout: () => api.post('/auth/logout/'),
   getMe: () => api.get('/auth/me/'),
 };
@@ -58,6 +59,8 @@ export const studentAPI = {
   getAttemptDetails: (attemptId) => api.get(`/student/attempts/${attemptId}/`),
   getAttemptResult: (attemptId) => api.get(`/student/results/${attemptId}/`),
   getPublishedResults: () => api.get('/student/results/'),
+  acknowledgeResult: (resultId, notes = '') => api.post(`/student/results/${resultId}/acknowledge/`, { notes }),
+  requestClarification: (resultId, message) => api.post(`/student/results/${resultId}/request-clarification/`, { message }),
 };
 
 export const facultyAPI = {
@@ -74,6 +77,13 @@ export const facultyAPI = {
   deleteQuestion: (questionId) => api.delete(`/faculty/questions/${questionId}/`),
 
   getAttempts: (examId) => api.get(`/faculty/exams/${examId}/attempts/`),
+  getSubmissions: (examId) => api.get(`/faculty/exams/${examId}/submissions/`),
+  getReviewDetail: (attemptId) => api.get(`/faculty/attempts/${attemptId}/review-detail/`),
+  saveReview: (attemptId, payload) => api.post(`/faculty/attempts/${attemptId}/save-review/`, payload),
+  publishReview: (attemptId) => api.post(`/faculty/attempts/${attemptId}/publish-review/`),
+  flagSubmission: (attemptId, payload) => api.post(`/faculty/attempts/${attemptId}/flag-submission/`, payload),
+  respondClarification: (attemptId, payload) => api.post(`/faculty/attempts/${attemptId}/respond-clarification/`, payload),
+
   getProctoringEvents: (attemptId) => api.get(`/faculty/attempts/${attemptId}/events/`),
   getAttemptAnalysis: (attemptId) => api.get(`/faculty/attempts/${attemptId}/analysis/`),
   bulkReviewIncident: (attemptId, payload) => api.post(`/faculty/attempts/${attemptId}/bulk-review/`, payload),

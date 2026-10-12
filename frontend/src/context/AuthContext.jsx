@@ -47,12 +47,28 @@ export const AuthProvider = ({ children }) => {
     return authUser;
   };
 
+  const register = async (studentData) => {
+    const res = await authAPI.register(studentData);
+    const { token: authToken, user: authUser } = res.data;
+    setToken(authToken);
+    setUser(authUser);
+    localStorage.setItem('exam_token', authToken);
+    localStorage.setItem('exam_user', JSON.stringify(authUser));
+    return authUser;
+  };
+
   const logout = async () => {
     try {
+      if (typeof window !== 'undefined' && window.__stopAllExamCameras) {
+        window.__stopAllExamCameras();
+      }
       await authAPI.logout();
     } catch {
       // Ignore errors on logout
     } finally {
+      if (typeof window !== 'undefined' && window.__stopAllExamCameras) {
+        window.__stopAllExamCameras();
+      }
       setUser(null);
       setToken(null);
       localStorage.removeItem('exam_token');
@@ -74,6 +90,7 @@ export const AuthProvider = ({ children }) => {
         isStudent,
         isFaculty,
         login,
+        register,
         logout,
       }}
     >

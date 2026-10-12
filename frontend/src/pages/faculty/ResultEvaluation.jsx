@@ -1,32 +1,56 @@
 import React, { useEffect, useState } from 'react';
 import { useParams, Link } from 'react-router-dom';
 import { facultyAPI } from '../../api/client';
+import { ConfirmModal } from '../../components/ConfirmModal';
+
+const STATUS_CONFIG = {
+  SUBMITTED: { label: 'Submitted', badgeClass: 'badge-neutral', color: '#64748b' },
+  PENDING_REVIEW: { label: 'Pending Review', badgeClass: 'badge-warning', color: '#f59e0b' },
+  UNDER_REVIEW: { label: 'Under Review', badgeClass: 'badge-warning', color: '#8b5cf6' },
+  FLAGGED: { label: 'Flagged for Investigation', badgeClass: 'badge-danger', color: '#ef4444' },
+  REVIEWED: { label: 'Reviewed', badgeClass: 'badge-success', color: '#0ea5e9' },
+  PUBLISHED: { label: 'Published', badgeClass: 'badge-success', color: '#10b981' },
+  RETURNED_FOR_CLARIFICATION: { label: 'Clarification Requested', badgeClass: 'badge-warning', color: '#f97316' },
+};
 
 export const ResultEvaluation = () => {
   const { examId } = useParams();
 
   const [exam, setExam] = useState(null);
-  const [results, setResults] = useState([]);
+  const [submissions, setSubmissions] = useState([]);
   const [loading, setLoading] = useState(true);
+  const [filterStatus, setFilterStatus] = useState('ALL');
 
-  // Evaluate Descriptive Modal
-  const [evalModalOpen, setEvalModalOpen] = useState(false);
-  const [currentAttempt, setCurrentAttempt] = useState(null);
-  const [evalMarks, setEvalMarks] = useState({});
-  const [evalComments, setEvalComments] = useState({});
-  const [savingEval, setSavingEval] = useState(false);
+  // Review Workspace Modal
+  const [reviewModalOpen, setReviewModalOpen] = useState(false);
+  const [reviewDetail, setReviewDetail] = useState(null);
+  const [loadingDetail, setLoadingDetail] = useState(false);
+
+  // Review Form States
+  const [marksState, setMarksState] = useState({});
+  const [commentsState, setCommentsState] = useState({});
+  const [facultyFeedback, setFacultyFeedback] = useState('');
+  const [internalNotes, setInternalNotes] = useState('');
+  const [clarificationResponse, setClarificationResponse] = useState('');
+  const [savingReview, setSavingReview] = useState(false);
+  const [activeTab, setActiveTab] = useState('questions'); // 'questions' | 'history'
+
+  // Flag Modal State
+  const [flagModalOpen, setFlagModalOpen] = useState(false);
+  const [flagReason, setFlagReason] = useState('');
+  const [targetAttemptId, setTargetAttemptId] = useState(null);
 
   const loadData = async () => {
     try {
       setLoading(true);
-      const [examRes, resRes] = await Promise.all([
+      const [examRes, subsRes] = await Promise.all([
         facultyAPI.getExam(examId),
-        facultyAPI.getResults(examId),
+        facultyAPI.getSubmissions(examId),
       ]);
       setExam(examRes.data);
-      setResults(resRes.data);
+      setSubmissions(subsRes.data);
     } catch {
-      alert('Failed to load results.');
+      alert('Failed to load examination submissions.');
     } finally {
       setLoading(false);
     }
@@ -36,62 +60,155 @@ export const ResultEvaluation = () => {
     loadData();
   }, [examId]);
 
-  const handleTogglePublish = async (shouldPublish) => {
-    try {
-      await facultyAPI.publishResults(examId, shouldPublish);
-      loadData();
-    } catch {
-      alert('Failed to update result publication status.');
-    }
-  };
+  const handleOpenReview = async (attemptId) => {
+    setLoadingDetail(true);
+    setReviewModalOpen(true);
+    setActiveTab('questions');
 
-  const handleOpenEvaluation = async (attemptId) => {
     try {
-      const res = await facultyAPI.getAttempts(examId);
-      const att = res.data.find((a) => a.id === attemptId);
-      if (att) {
-        setCurrentAttempt(att);
-        // Pre-fill existing marks if any
-        const initialMarks = {};
-        const initialComments = {};
-        (att.saved_answers || []).forEach((ans) => {
-          if (ans.awarded_marks !== null && ans.awarded_marks !== undefined) {
-            initialMarks[ans.id] = ans.awarded_marks;
+      const res = await facultyAPI.getReviewDetail(attemptId);
+      const data = res.data;
+      setReviewDetail(data);
+
+      // Pre-fill existing marks and comments
+      const initMarks = {};
+      const initComments = {};
+      (data.questions || []).forEach((q) => {
+        if (q.student_answer) {
+          if (q.student_answer.awarded_marks !== null && q.student_answer.awarded_marks !== undefined) {
+            initMarks[q.student_answer.id] = q.student_answer.awarded_marks;
           }
-        });
-        setEvalMarks(initialMarks);
-        setEvalComments(initialComments);
-        setEvalModalOpen(true);
-      }
-    } catch {
-      alert('Unable to load attempt details for grading.');
+          if (q.student_answer.evaluator_comment) {
+            initComments[q.student_answer.id] = q.student_answer.evaluator_comment;
+          }
+        }
+      });
+      setMarksState(initMarks);
+      setCommentsState(initComments);
+      setFacultyFeedback(data.result?.feedback || '');
+      setInternalNotes(data.result?.internal_notes || '');
+      setClarificationResponse(data.result?.clarification_response_text || '');
+    } catch (err) {
+      alert(err.response?.data?.error || 'Unable to open submission review workspace.');
+      setReviewModalOpen(false);
+    } finally {
+      setLoadingDetail(false);
     }
   };
 
-  const handleSaveAnswerGrade = async (answerId) => {
-    const marks = evalMarks[answerId];
-    if (marks === undefined || marks === '') {
-      alert('Please enter a marks value.');
-      return;
+  const handleSaveReview = async (targetStatus) => {
+    if (!reviewDetail?.attempt?.id) return;
+
+    // Validate marks before sending
+    for (const q of reviewDetail.questions || []) {
+      if (q.question_type === 'DESCRIPTIVE' && q.student_answer?.id) {
+        const val = marksState[q.student_answer.id];
+        if (val !== undefined && val !== '') {
+          const num = parseFloat(val);
+          if (isNaN(num) || num < 0 || num > q.marks) {
+            alert(`Marks for Question ${q.order} must be between 0 and maximum ${q.marks}.`);
+            return;
+          }
+        }
+      }
     }
 
+    setSavingReview(true);
     try {
-      setSavingEval(true);
-      await facultyAPI.evaluateAnswer({
-        answer_id: answerId,
-        awarded_marks: parseFloat(marks),
-        evaluator_comment: evalComments[answerId] || '',
+      await facultyAPI.saveReview(reviewDetail.attempt.id, {
+        review_status: targetStatus,
+        descriptive_marks: marksState,
+        answer_comments: commentsState,
+        faculty_feedback: facultyFeedback,
+        internal_notes: internalNotes,
       });
-      alert('Marks saved successfully!');
+
+      alert(`Review ${targetStatus === 'REVIEWED' ? 'finalized' : 'saved as draft'} successfully!`);
+      // Reload review details & list
+      const res = await facultyAPI.getReviewDetail(reviewDetail.attempt.id);
+      setReviewDetail(res.data);
       loadData();
     } catch (err) {
-      alert(err.response?.data?.error || 'Failed to save grade.');
+      alert(err.response?.data?.error || 'Failed to save review.');
     } finally {
-      setSavingEval(false);
+      setSavingReview(false);
     }
   };
 
-  const isAllPublished = results.length > 0 && results.every((r) => r.is_published);
+  const handlePublishReview = async (attemptId) => {
+    try {
+      await facultyAPI.publishReview(attemptId);
+      alert('Official results and feedback have been published to the student!');
+      if (reviewModalOpen && reviewDetail?.attempt?.id === attemptId) {
+        const res = await facultyAPI.getReviewDetail(attemptId);
+        setReviewDetail(res.data);
+      }
+      loadData();
+    } catch (err) {
+      alert(err.response?.data?.error || 'Failed to publish results.');
+    }
+  };
+
+  const handleOpenFlagModal = (attemptId) => {
+    setTargetAttemptId(attemptId);
+    setFlagReason('');
+    setFlagModalOpen(true);
+  };
+
+  const handleConfirmFlag = async () => {
+    if (!flagReason.trim()) {
+      alert('Please provide a reason for flagging this submission.');
+      return;
+    }
+    try {
+      await facultyAPI.flagSubmission(targetAttemptId, {
+        flag_reason: flagReason.trim(),
+        notes: 'Flagged via Faculty Review Workspace',
+      });
+      alert('Submission flagged for investigation. Academic marks are preserved.');
+      setFlagModalOpen(false);
+      if (reviewModalOpen && reviewDetail?.attempt?.id === targetAttemptId) {
+        const res = await facultyAPI.getReviewDetail(targetAttemptId);
+        setReviewDetail(res.data);
+      }
+      loadData();
+    } catch (err) {
+      alert(err.response?.data?.error || 'Failed to flag submission.');
+    }
+  };
+
+  const handleSendClarification = async () => {
+    if (!clarificationResponse.trim()) {
+      alert('Please enter a response for the student.');
+      return;
+    }
+    try {
+      await facultyAPI.respondClarification(reviewDetail.attempt.id, {
+        response_text: clarificationResponse.trim(),
+      });
+      alert('Clarification response sent to student.');
+      const res = await facultyAPI.getReviewDetail(reviewDetail.attempt.id);
+      setReviewDetail(res.data);
+      loadData();
+    } catch (err) {
+      alert(err.response?.data?.error || 'Failed to send clarification response.');
+    }
+  };
+
+  const handleBatchPublish = async (shouldPublish) => {
+    try {
+      await facultyAPI.publishResults(examId, shouldPublish);
+      alert(`All submissions ${shouldPublish ? 'published' : 'hidden'} successfully.`);
+      loadData();
+    } catch {
+      alert('Failed to update publication status.');
+    }
+  };
+
+  const filteredSubmissions = submissions.filter((s) => {
+    if (filterStatus === 'ALL') return true;
+    return s.review_status === filterStatus;
+  });
 
   return (
     <div className="page-container">
@@ -103,30 +220,58 @@ export const ResultEvaluation = () => {
             </Link>
           </div>
           <h1 className="page-title">
-            Gradebook & Results: {exam?.title || 'Exam'}
+            Marking & Review Workflow: {exam?.title || 'Exam'}
           </h1>
           <p className="page-subtitle">
-            Evaluate descriptive answers and publish official scores to students
+            Evaluate submitted student answers, award marks, record written feedback, and release official grades
           </p>
         </div>
 
         <div style={{ display: 'flex', gap: '10px' }}>
           <button
-            onClick={() => handleTogglePublish(!isAllPublished)}
-            className={`btn ${isAllPublished ? 'btn-danger' : 'btn-success'}`}
+            onClick={() => handleBatchPublish(true)}
+            className="btn btn-success"
+            title="Publish all graded results to students"
           >
-            {isAllPublished ? 'Unpublish All Results' : 'Publish Results to Students 📢'}
+            Publish All Results 📢
           </button>
         </div>
       </div>
 
+      {/* Filter Status Pills */}
+      <div style={{ display: 'flex', gap: '8px', flexWrap: 'wrap', marginBottom: '20px' }}>
+        {['ALL', 'SUBMITTED', 'PENDING_REVIEW', 'UNDER_REVIEW', 'FLAGGED', 'REVIEWED', 'PUBLISHED', 'RETURNED_FOR_CLARIFICATION'].map((st) => {
+          const isActive = filterStatus === st;
+          const count = st === 'ALL' ? submissions.length : submissions.filter((s) => s.review_status === st).length;
+          const config = STATUS_CONFIG[st];
+
+          return (
+            <button
+              key={st}
+              onClick={() => setFilterStatus(st)}
+              className={`btn btn-sm ${isActive ? 'btn-primary' : 'btn-secondary'}`}
+              style={{
+                borderRadius: '20px',
+                padding: '6px 14px',
+                fontSize: '12px',
+                fontWeight: '600',
+              }}
+            >
+              {st === 'ALL' ? 'All Submissions' : config?.label || st} ({count})
+            </button>
+          );
+        })}
+      </div>
+
       <div className="card" style={{ padding: '0', overflow: 'hidden' }}>
         {loading ? (
-          <div style={{ padding: '36px', textAlign: 'center', color: 'var(--gray-500)' }}>Loading gradebook...</div>
-        ) : results.length === 0 ? (
+          <div style={{ padding: '40px', textAlign: 'center', color: 'var(--gray-500)' }}>
+            Loading student submissions...
+          </div>
+        ) : filteredSubmissions.length === 0 ? (
           <div style={{ padding: '48px', textAlign: 'center', color: 'var(--gray-500)' }}>
-            <p style={{ fontSize: '16px', fontWeight: '500' }}>No submitted attempts to evaluate yet.</p>
-            <p style={{ fontSize: '13px', marginTop: '6px' }}>Results will appear here as soon as students submit their exams.</p>
+            <p style={{ fontSize: '16px', fontWeight: '500' }}>No submissions matching this filter.</p>
+            <p style={{ fontSize: '13px', marginTop: '6px' }}>Student submissions will appear here once submitted.</p>
           </div>
         ) : (
           <div className="table-responsive">
@@ -134,153 +279,518 @@ export const ResultEvaluation = () => {
               <thead>
                 <tr>
                   <th>Student</th>
+                  <th>Submission Time</th>
+                  <th>Review Status</th>
                   <th>Objective (MCQ)</th>
                   <th>Descriptive</th>
                   <th>Total Score</th>
-                  <th>Percentage</th>
-                  <th>Status</th>
                   <th>Public Visibility</th>
                   <th>Actions</th>
                 </tr>
               </thead>
               <tbody>
-                {results.map((r) => (
-                  <tr key={r.id}>
-                    <td>
-                      <div style={{ fontWeight: '600', color: 'var(--gray-900)' }}>
-                        {r.student_name || r.student_username}
-                      </div>
-                      <div style={{ fontSize: '12px', color: 'var(--gray-500)' }}>
-                        Roll: {r.roll_number || 'N/A'}
-                      </div>
-                    </td>
-                    <td>{r.objective_score} marks</td>
-                    <td>{r.descriptive_score} marks</td>
-                    <td>
-                      <strong style={{ fontSize: '16px', color: r.passed ? 'var(--success)' : 'var(--danger)' }}>
-                        {r.total_score} / {r.exam_total_marks}
-                      </strong>
-                    </td>
-                    <td>{r.percentage}%</td>
-                    <td>
-                      {r.passed ? (
-                        <span className="badge badge-success">PASSED</span>
-                      ) : (
-                        <span className="badge badge-danger">FAILED</span>
-                      )}
-                    </td>
-                    <td>
-                      {r.is_published ? (
-                        <span className="badge badge-success">Released</span>
-                      ) : (
-                        <span className="badge badge-neutral">Private</span>
-                      )}
-                    </td>
-                    <td>
-                      <button
-                        onClick={() => handleOpenEvaluation(r.attempt)}
-                        className="btn btn-secondary btn-sm"
-                      >
-                        Evaluate Essay Answers ✍️
-                      </button>
-                    </td>
-                  </tr>
-                ))}
+                {filteredSubmissions.map((sub) => {
+                  const cfg = STATUS_CONFIG[sub.review_status] || STATUS_CONFIG.SUBMITTED;
+
+                  return (
+                    <tr key={sub.id}>
+                      <td>
+                        <div style={{ fontWeight: '700', color: 'var(--gray-900)' }}>
+                          {sub.student_name || sub.student_username}
+                        </div>
+                        <div style={{ fontSize: '12px', color: 'var(--gray-500)' }}>
+                          Roll No: {sub.roll_number || 'N/A'} • @{sub.student_username}
+                        </div>
+                      </td>
+
+                      <td style={{ fontSize: '13px', color: 'var(--gray-600)' }}>
+                        {new Date(sub.created_at).toLocaleString([], { dateStyle: 'short', timeStyle: 'short' })}
+                      </td>
+
+                      <td>
+                        <span
+                          className={`badge ${cfg.badgeClass}`}
+                          style={{
+                            background: sub.review_status === 'FLAGGED' ? '#fee2e2' : undefined,
+                            color: sub.review_status === 'FLAGGED' ? '#b91c1c' : undefined,
+                          }}
+                        >
+                          {cfg.label}
+                        </span>
+                        {sub.clarification_requested && (
+                          <div style={{ fontSize: '11px', color: '#f97316', marginTop: '4px', fontWeight: '600' }}>
+                            💬 Clarification Request
+                          </div>
+                        )}
+                      </td>
+
+                      <td>{sub.objective_score} pts</td>
+                      <td>{sub.descriptive_score} pts</td>
+
+                      <td>
+                        <strong style={{ fontSize: '15px', color: sub.passed ? 'var(--success)' : 'var(--danger)' }}>
+                          {sub.total_score} / {sub.exam_total_marks}
+                        </strong>
+                        <div style={{ fontSize: '11px', color: 'var(--gray-500)' }}>
+                          ({sub.percentage}%) {sub.passed ? 'PASS' : 'FAIL'}
+                        </div>
+                      </td>
+
+                      <td>
+                        {sub.is_published ? (
+                          <span className="badge badge-success">Published 📢</span>
+                        ) : (
+                          <span className="badge badge-neutral">Private / Draft</span>
+                        )}
+                        {sub.student_acknowledged && (
+                          <div style={{ fontSize: '11px', color: '#059669', marginTop: '4px' }}>
+                            ✓ Acknowledged by student
+                          </div>
+                        )}
+                      </td>
+
+                      <td>
+                        <div style={{ display: 'flex', gap: '6px', alignItems: 'center' }}>
+                          <button
+                            onClick={() => handleOpenReview(sub.attempt)}
+                            className="btn btn-primary btn-sm"
+                            title="Evaluate and mark answers"
+                          >
+                            Mark & Review 📝
+                          </button>
+
+                          {!sub.is_published && (
+                            <button
+                              onClick={() => handlePublishReview(sub.attempt)}
+                              className="btn btn-secondary btn-sm"
+                              style={{ color: '#059669', borderColor: '#10b981' }}
+                              title="Publish results to student"
+                            >
+                              Publish 📢
+                            </button>
+                          )}
+
+                          {sub.review_status !== 'FLAGGED' && (
+                            <button
+                              onClick={() => handleOpenFlagModal(sub.attempt)}
+                              className="btn btn-secondary btn-sm"
+                              style={{ color: '#b91c1c' }}
+                              title="Flag for investigation"
+                            >
+                              Flag ⚠️
+                            </button>
+                          )}
+                        </div>
+                      </td>
+                    </tr>
+                  );
+                })}
               </tbody>
             </table>
           </div>
         )}
       </div>
 
-      {/* Evaluate Descriptive Answers Modal */}
-      {evalModalOpen && currentAttempt && (
+      {/* Review Workspace Modal */}
+      {reviewModalOpen && (
         <div className="modal-backdrop">
-          <div className="modal-card" style={{ maxWidth: '800px', maxHeight: '85vh', display: 'flex', flexDirection: 'column' }}>
-            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '16px' }}>
-              <h2 style={{ fontSize: '18px', fontWeight: '800' }}>
-                Evaluate Descriptive Responses (Attempt #{currentAttempt.id})
-              </h2>
-              <button onClick={() => setEvalModalOpen(false)} className="btn btn-secondary btn-sm">
+          <div className="modal-card" style={{ maxWidth: '950px', maxHeight: '90vh', display: 'flex', flexDirection: 'column', width: '95%' }}>
+            {/* Modal Header */}
+            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', paddingBottom: '16px', borderBottom: '1px solid var(--gray-200)', marginBottom: '16px' }}>
+              <div>
+                <div style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
+                  <h2 style={{ fontSize: '20px', fontWeight: '800', margin: 0 }}>
+                    Submission Review & Marking
+                  </h2>
+                  {reviewDetail?.result && (
+                    <span className={`badge ${STATUS_CONFIG[reviewDetail.result.review_status]?.badgeClass || 'badge-neutral'}`}>
+                      {STATUS_CONFIG[reviewDetail.result.review_status]?.label || reviewDetail.result.review_status}
+                    </span>
+                  )}
+                </div>
+                <div style={{ fontSize: '13px', color: 'var(--gray-600)', marginTop: '4px' }}>
+                  Student: <strong>{reviewDetail?.attempt?.student_name}</strong> (Roll: {reviewDetail?.attempt?.roll_number || 'N/A'}) • Attempt #{reviewDetail?.attempt?.attempt_number} • Submitted: {new Date(reviewDetail?.attempt?.submitted_at || Date.now()).toLocaleString()}
+                </div>
+              </div>
+
+              <button onClick={() => setReviewModalOpen(false)} className="btn btn-secondary btn-sm">
                 Close
               </button>
             </div>
 
-            <div style={{ flex: 1, overflowY: 'auto', display: 'flex', flexDirection: 'column', gap: '16px', paddingRight: '4px' }}>
-              {currentAttempt.questions?.filter((q) => q.question_type === 'DESCRIPTIVE').length === 0 ? (
-                <div style={{ textAlign: 'center', padding: '32px', color: 'var(--gray-500)' }}>
-                  This exam only contains objective MCQ questions (already auto-graded).
-                </div>
-              ) : (
-                currentAttempt.questions
-                  ?.filter((q) => q.question_type === 'DESCRIPTIVE')
-                  .map((q) => {
-                    const ans = (currentAttempt.saved_answers || []).find((a) => a.question_id === q.id) || {};
-                    return (
-                      <div key={q.id} style={{ border: '1px solid var(--gray-200)', borderRadius: '8px', padding: '16px', background: '#fff' }}>
-                        <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: '8px' }}>
-                          <span style={{ fontWeight: '700', fontSize: '14px', color: 'var(--primary)' }}>
-                            Question (Max {q.marks} Marks)
-                          </span>
-                        </div>
-                        <div style={{ fontSize: '15px', fontWeight: '600', color: 'var(--gray-900)', marginBottom: '12px' }}>
-                          {q.question_text}
-                        </div>
+            {loadingDetail ? (
+              <div style={{ padding: '40px', textAlign: 'center', color: 'var(--gray-500)' }}>
+                Loading submission answers and history...
+              </div>
+            ) : (
+              <div style={{ flex: 1, overflowY: 'auto', display: 'flex', flexDirection: 'column', gap: '16px', paddingRight: '6px' }}>
+                {/* Flag Banner if Flagged */}
+                {reviewDetail?.result?.review_status === 'FLAGGED' && (
+                  <div style={{ background: '#fef2f2', border: '1px solid #f87171', borderRadius: '8px', padding: '14px 18px', color: '#991b1b' }}>
+                    <div style={{ fontWeight: '800', fontSize: '14px', display: 'flex', alignItems: 'center', gap: '8px' }}>
+                      <span>⚠️ SUBMISSION FLAGGED FOR INTEGRITY INVESTIGATION</span>
+                    </div>
+                    <div style={{ fontSize: '13px', marginTop: '6px' }}>
+                      <strong>Reason:</strong> {reviewDetail.result.flag_reason || 'Under review for potential exam anomaly.'}
+                    </div>
+                    <div style={{ fontSize: '12px', marginTop: '4px', color: '#7f1d1d' }}>
+                      Note: Academic grading and points are maintained independently of the investigation decision.
+                    </div>
+                  </div>
+                )}
 
-                        <div style={{ background: 'var(--gray-50)', padding: '12px', borderRadius: '6px', border: '1px solid var(--gray-200)', marginBottom: '12px' }}>
-                          <div style={{ fontSize: '11px', color: 'var(--gray-500)', fontWeight: '700', textTransform: 'uppercase', marginBottom: '4px' }}>
-                            Student Written Response:
-                          </div>
-                          <div style={{ fontSize: '14px', color: 'var(--gray-800)', whiteSpace: 'pre-wrap' }}>
-                            {ans.text_response || <em style={{ color: 'var(--gray-400)' }}>No text submitted for this question.</em>}
-                          </div>
-                        </div>
+                {/* Clarification Request Banner */}
+                {reviewDetail?.result?.clarification_requested && (
+                  <div style={{ background: '#fffbeb', border: '1px solid #fcd34d', borderRadius: '8px', padding: '14px 18px', color: '#92400e' }}>
+                    <div style={{ fontWeight: '800', fontSize: '14px' }}>
+                      💬 Student Clarification Request
+                    </div>
+                    <p style={{ fontSize: '13px', margin: '6px 0 12px 0', fontStyle: 'italic', background: '#fff', padding: '8px 12px', borderRadius: '6px', border: '1px solid #fef3c7' }}>
+                      "{reviewDetail.result.clarification_request_text}"
+                    </p>
 
-                        {ans.id ? (
-                          <div style={{ display: 'grid', gridTemplateColumns: '140px 1fr auto', gap: '10px', alignItems: 'flex-end' }}>
-                            <div className="form-group" style={{ margin: 0 }}>
-                              <label className="form-label" style={{ fontSize: '12px' }}>Marks (0 - {q.marks})</label>
-                              <input
-                                type="number"
-                                step="0.5"
-                                min="0"
-                                max={q.marks}
-                                className="form-control"
-                                value={evalMarks[ans.id] !== undefined ? evalMarks[ans.id] : ''}
-                                onChange={(e) => setEvalMarks((prev) => ({ ...prev, [ans.id]: e.target.value }))}
-                              />
-                            </div>
-                            <div className="form-group" style={{ margin: 0 }}>
-                              <label className="form-label" style={{ fontSize: '12px' }}>Evaluator Feedback</label>
-                              <input
-                                type="text"
-                                className="form-control"
-                                placeholder="Optional feedback..."
-                                value={evalComments[ans.id] !== undefined ? evalComments[ans.id] : ''}
-                                onChange={(e) => setEvalComments((prev) => ({ ...prev, [ans.id]: e.target.value }))}
-                              />
-                            </div>
-                            <button
-                              onClick={() => handleSaveAnswerGrade(ans.id)}
-                              disabled={savingEval}
-                              className="btn btn-primary btn-sm"
-                              style={{ height: '38px' }}
-                            >
-                              Save Grade
-                            </button>
-                          </div>
-                        ) : (
-                          <div style={{ fontSize: '12px', color: 'var(--gray-500)' }}>
-                            No answer record available.
-                          </div>
-                        )}
+                    <div style={{ display: 'flex', gap: '10px', alignItems: 'flex-end' }}>
+                      <div style={{ flex: 1 }}>
+                        <label className="form-label" style={{ fontSize: '12px' }}>Your Instructor Response:</label>
+                        <textarea
+                          rows={2}
+                          className="form-control"
+                          value={clarificationResponse}
+                          onChange={(e) => setClarificationResponse(e.target.value)}
+                          placeholder="Type explanation or guidance for the student..."
+                        />
                       </div>
-                    );
-                  })
-              )}
+                      <button
+                        onClick={handleSendClarification}
+                        className="btn btn-warning btn-sm"
+                        style={{ height: '38px', background: '#d97706', color: '#fff' }}
+                      >
+                        Send Clarification Response
+                      </button>
+                    </div>
+                  </div>
+                )}
+
+                {/* Tab Navigation */}
+                <div style={{ display: 'flex', borderBottom: '1px solid var(--gray-200)', gap: '16px' }}>
+                  <button
+                    onClick={() => setActiveTab('questions')}
+                    style={{
+                      background: 'none',
+                      border: 'none',
+                      padding: '8px 4px',
+                      fontSize: '14px',
+                      fontWeight: activeTab === 'questions' ? '700' : '500',
+                      color: activeTab === 'questions' ? 'var(--primary)' : 'var(--gray-500)',
+                      borderBottom: activeTab === 'questions' ? '2px solid var(--primary)' : 'none',
+                      cursor: 'pointer',
+                    }}
+                  >
+                    Submitted Answers ({reviewDetail?.questions?.length || 0})
+                  </button>
+                  <button
+                    onClick={() => setActiveTab('history')}
+                    style={{
+                      background: 'none',
+                      border: 'none',
+                      padding: '8px 4px',
+                      fontSize: '14px',
+                      fontWeight: activeTab === 'history' ? '700' : '500',
+                      color: activeTab === 'history' ? 'var(--primary)' : 'var(--gray-500)',
+                      borderBottom: activeTab === 'history' ? '2px solid var(--primary)' : 'none',
+                      cursor: 'pointer',
+                    }}
+                  >
+                    Audit Trail & History ({reviewDetail?.result?.history?.length || 0})
+                  </button>
+                </div>
+
+                {activeTab === 'questions' ? (
+                  <>
+                    {/* Questions & Answers List */}
+                    <div style={{ display: 'flex', flexDirection: 'column', gap: '16px' }}>
+                      {(reviewDetail?.questions || []).map((q) => {
+                        const ans = q.student_answer || {};
+                        const isMCQ = q.question_type === 'MCQ';
+
+                        return (
+                          <div
+                            key={q.id}
+                            style={{
+                              border: '1px solid var(--gray-200)',
+                              borderRadius: '8px',
+                              padding: '16px',
+                              background: '#fff',
+                            }}
+                          >
+                            <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: '8px' }}>
+                              <span style={{ fontWeight: '700', fontSize: '13px', color: 'var(--primary)' }}>
+                                QUESTION {q.order} • {isMCQ ? 'Multiple Choice (MCQ)' : 'Descriptive Essay'}
+                              </span>
+                              <span style={{ fontSize: '13px', fontWeight: '700', color: 'var(--gray-700)' }}>
+                                Max {q.marks} Marks
+                              </span>
+                            </div>
+
+                            <div style={{ fontSize: '15px', fontWeight: '600', color: 'var(--gray-900)', marginBottom: '12px' }}>
+                              {q.question_text}
+                            </div>
+
+                            {/* MCQ Choices Breakdown */}
+                            {isMCQ ? (
+                              <div style={{ display: 'flex', flexDirection: 'column', gap: '6px', marginBottom: '12px' }}>
+                                {(q.options || []).map((opt) => (
+                                  <div
+                                    key={opt.id}
+                                    style={{
+                                      padding: '8px 12px',
+                                      borderRadius: '6px',
+                                      fontSize: '13px',
+                                      display: 'flex',
+                                      justifyContent: 'space-between',
+                                      alignItems: 'center',
+                                      background: opt.is_selected
+                                        ? opt.is_correct
+                                          ? '#ecfdf5'
+                                          : '#fef2f2'
+                                        : '#f8fafc',
+                                      border: opt.is_selected
+                                        ? opt.is_correct
+                                          ? '1px solid #10b981'
+                                          : '1px solid #ef4444'
+                                        : '1px solid var(--gray-200)',
+                                    }}
+                                  >
+                                    <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+                                      <span>{opt.is_selected ? '●' : '○'}</span>
+                                      <span>{opt.option_text}</span>
+                                    </div>
+                                    <div style={{ fontSize: '11px', fontWeight: '700' }}>
+                                      {opt.is_selected && (
+                                        <span style={{ marginRight: '8px', color: opt.is_correct ? '#059669' : '#dc2626' }}>
+                                          [Student Selected]
+                                        </span>
+                                      )}
+                                      {opt.is_correct && (
+                                        <span style={{ color: '#059669' }}>✓ Correct Answer</span>
+                                      )}
+                                    </div>
+                                  </div>
+                                ))}
+                                <div style={{ fontSize: '12px', color: 'var(--gray-600)', marginTop: '4px' }}>
+                                  Auto-calculated Score: <strong>{ans.awarded_marks !== null ? `${ans.awarded_marks} / ${q.marks}` : '0 / ' + q.marks}</strong>
+                                </div>
+                              </div>
+                            ) : (
+                              /* Descriptive Written Response & Marking Controls */
+                              <div>
+                                <div style={{ background: '#f8fafc', padding: '14px', borderRadius: '6px', border: '1px solid var(--gray-200)', marginBottom: '14px' }}>
+                                  <div style={{ fontSize: '11px', color: 'var(--gray-500)', fontWeight: '700', textTransform: 'uppercase', marginBottom: '6px' }}>
+                                    Student Written Submission:
+                                  </div>
+                                  <div style={{ fontSize: '14px', color: 'var(--gray-900)', whiteSpace: 'pre-wrap', lineHeight: '1.6' }}>
+                                    {ans.text_response || <em style={{ color: 'var(--gray-400)' }}>No response provided for this question.</em>}
+                                  </div>
+                                </div>
+
+                                {ans.id && (
+                                  <div style={{ display: 'grid', gridTemplateColumns: '150px 1fr', gap: '14px', alignItems: 'flex-start', background: '#f0fdf4', padding: '12px 16px', borderRadius: '6px', border: '1px solid #bbf7d0' }}>
+                                    <div className="form-group" style={{ margin: 0 }}>
+                                      <label className="form-label" style={{ fontSize: '12px', fontWeight: '700' }}>
+                                        Marks (0 to {q.marks}) *
+                                      </label>
+                                      <input
+                                        type="number"
+                                        step="0.5"
+                                        min="0"
+                                        max={q.marks}
+                                        className="form-control"
+                                        value={marksState[ans.id] !== undefined ? marksState[ans.id] : ''}
+                                        onChange={(e) => setMarksState((prev) => ({ ...prev, [ans.id]: e.target.value }))}
+                                        placeholder={`0 - ${q.marks}`}
+                                      />
+                                    </div>
+
+                                    <div className="form-group" style={{ margin: 0 }}>
+                                      <label className="form-label" style={{ fontSize: '12px', fontWeight: '700' }}>
+                                        Question Feedback (Optional)
+                                      </label>
+                                      <input
+                                        type="text"
+                                        className="form-control"
+                                        value={commentsState[ans.id] !== undefined ? commentsState[ans.id] : ''}
+                                        onChange={(e) => setCommentsState((prev) => ({ ...prev, [ans.id]: e.target.value }))}
+                                        placeholder="Specific feedback on this response..."
+                                      />
+                                    </div>
+                                  </div>
+                                )}
+                              </div>
+                            )}
+                          </div>
+                        );
+                      })}
+                    </div>
+
+                    {/* Overall Written Feedback & Internal Notes Section */}
+                    <div style={{ background: '#fff', border: '1px solid var(--gray-200)', borderRadius: '8px', padding: '16px', display: 'flex', flexDirection: 'column', gap: '14px' }}>
+                      <h3 style={{ fontSize: '15px', fontWeight: '700', margin: 0, color: 'var(--gray-900)' }}>
+                        Overall Review Feedback & Academic Decision
+                      </h3>
+
+                      <div className="form-group" style={{ margin: 0 }}>
+                        <label className="form-label">
+                          Written Student Feedback (Visible to student once published):
+                        </label>
+                        <textarea
+                          rows={3}
+                          className="form-control"
+                          value={facultyFeedback}
+                          onChange={(e) => setFacultyFeedback(e.target.value)}
+                          placeholder="Provide constructive feedback, notes on performance, or exam summary..."
+                        />
+                      </div>
+
+                      <div className="form-group" style={{ margin: 0 }}>
+                        <label className="form-label" style={{ color: 'var(--gray-600)' }}>
+                          Internal Grading Notes (Private / Confidential to Faculty & Admins):
+                        </label>
+                        <textarea
+                          rows={2}
+                          className="form-control"
+                          value={internalNotes}
+                          onChange={(e) => setInternalNotes(e.target.value)}
+                          placeholder="Internal observations, integrity notes, or moderation remarks..."
+                        />
+                      </div>
+                    </div>
+                  </>
+                ) : (
+                  /* History Audit Tab */
+                  <div style={{ display: 'flex', flexDirection: 'column', gap: '10px' }}>
+                    {(reviewDetail?.result?.history || []).length === 0 ? (
+                      <div style={{ textAlign: 'center', padding: '32px', color: 'var(--gray-500)' }}>
+                        No review actions recorded yet for this submission.
+                      </div>
+                    ) : (
+                      (reviewDetail?.result?.history || []).map((h) => (
+                        <div
+                          key={h.id}
+                          style={{
+                            background: '#fff',
+                            border: '1px solid var(--gray-200)',
+                            borderRadius: '6px',
+                            padding: '12px 16px',
+                            display: 'flex',
+                            justifyContent: 'space-between',
+                            alignItems: 'flex-start',
+                          }}
+                        >
+                          <div>
+                            <div style={{ fontWeight: '700', fontSize: '13px', color: 'var(--gray-900)' }}>
+                              Action: {h.action} • {h.previous_status} ➔ {h.new_status}
+                            </div>
+                            <div style={{ fontSize: '12px', color: 'var(--gray-600)', marginTop: '2px' }}>
+                              Reviewer: <strong>{h.reviewer_name || h.reviewer_username || 'System'}</strong>
+                            </div>
+                            {h.notes && (
+                              <div style={{ fontSize: '12px', color: 'var(--gray-700)', fontStyle: 'italic', marginTop: '4px' }}>
+                                "{h.notes}"
+                              </div>
+                            )}
+                          </div>
+                          <div style={{ fontSize: '11px', color: 'var(--gray-400)' }}>
+                            {new Date(h.created_at).toLocaleString()}
+                          </div>
+                        </div>
+                      ))
+                    )}
+                  </div>
+                )}
+              </div>
+            )}
+
+            {/* Modal Bottom Action Bar */}
+            <div
+              style={{
+                marginTop: '16px',
+                paddingTop: '16px',
+                borderTop: '1px solid var(--gray-200)',
+                display: 'flex',
+                justifyContent: 'space-between',
+                alignItems: 'center',
+                flexWrap: 'wrap',
+                gap: '10px',
+              }}
+            >
+              <div style={{ display: 'flex', gap: '8px' }}>
+                <button
+                  type="button"
+                  onClick={() => handleSaveReview('UNDER_REVIEW')}
+                  disabled={savingReview || loadingDetail}
+                  className="btn btn-secondary"
+                >
+                  Save Draft Review
+                </button>
+
+                <button
+                  type="button"
+                  onClick={() => handleSaveReview('REVIEWED')}
+                  disabled={savingReview || loadingDetail}
+                  className="btn btn-primary"
+                >
+                  Complete Review ✓
+                </button>
+
+                <button
+                  type="button"
+                  onClick={() => handlePublishReview(reviewDetail?.attempt?.id)}
+                  disabled={savingReview || loadingDetail}
+                  className="btn btn-success"
+                >
+                  Finalize & Publish 📢
+                </button>
+              </div>
+
+              <div>
+                {reviewDetail?.result?.review_status !== 'FLAGGED' && (
+                  <button
+                    type="button"
+                    onClick={() => handleOpenFlagModal(reviewDetail?.attempt?.id)}
+                    className="btn btn-secondary"
+                    style={{ color: '#b91c1c' }}
+                  >
+                    Flag Submission ⚠️
+                  </button>
+                )}
+              </div>
             </div>
           </div>
         </div>
       )}
+
+      {/* Flag Submission Modal */}
+      <ConfirmModal
+        isOpen={flagModalOpen}
+        title="⚠️ Flag Submission for Investigation"
+        message="Flagging this submission indicates potential academic or proctoring irregularities that require further review. Note: Academic marks are preserved and not zeroed out."
+        confirmText="Flag Submission"
+        confirmVariant="danger"
+        onConfirm={handleConfirmFlag}
+        onCancel={() => setFlagModalOpen(false)}
+      >
+        <div className="form-group" style={{ marginTop: '12px' }}>
+          <label className="form-label">Investigation Reason *</label>
+          <textarea
+            required
+            rows={3}
+            className="form-control"
+            value={flagReason}
+            onChange={(e) => setFlagReason(e.target.value)}
+            placeholder="Describe the reason for investigation (e.g. repeated multiple face anomalies, unauthorized browser blur, suspicious answer timing)..."
+          />
+        </div>
+      </ConfirmModal>
     </div>
   );
 };

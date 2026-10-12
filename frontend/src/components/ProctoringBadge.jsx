@@ -7,9 +7,11 @@ import {
   STATE_CONFIG,
   isCameraStreamLive,
   stopMediaStream,
+  stopAllCameraStreams,
+  requestManagedCamera,
 } from '../utils/proctoringHelpers';
 
-export { ProctoringState, STATE_CONFIG, isCameraStreamLive, stopMediaStream };
+export { ProctoringState, STATE_CONFIG, isCameraStreamLive, stopMediaStream, stopAllCameraStreams };
 
 // Module-level singleton cache for MediaPipe FaceDetector to prevent repeated downloads
 let sharedVisionPromise = null;
@@ -93,6 +95,7 @@ const ProctoringBadgeComponent = ({
       detectionIntervalRef.current = null;
     }
     stopMediaStream(streamRef.current, videoRef.current);
+    stopAllCameraStreams(videoRef.current);
     streamRef.current = null;
     setIsCameraLive(false);
     setFaceCount(null);
@@ -174,13 +177,15 @@ const ProctoringBadgeComponent = ({
     setCameraStatusMsg('Requesting camera access...');
 
     try {
-      const stream = await navigator.mediaDevices.getUserMedia({
+      const { stream, cancelled } = await requestManagedCamera({
         video: { width: { ideal: 320 }, height: { ideal: 240 }, frameRate: { max: 15 } },
         audio: false,
       });
 
-      if (isUnmountedRef.current) {
-        stream.getTracks().forEach((t) => t.stop());
+      if (cancelled || !stream || isUnmountedRef.current) {
+        if (stream) {
+          stopMediaStream(stream);
+        }
         return;
       }
 
@@ -226,7 +231,7 @@ const ProctoringBadgeComponent = ({
         : 'Camera blocked or unavailable.';
       handleCameraUnavailable(errMsg);
     }
-  }, [attemptId, enableProctoring, handleCameraUnavailable, handleCameraRestored]);
+  }, [attemptId, enableProctoring, handleCameraUnavailable, handleCameraRestored, stopCameraStream]);
 
   // Public reconnect handler for student retry button
   const handleReconnectClick = useCallback(() => {

@@ -2,6 +2,26 @@
  * Proctoring States and Stream Liveness Helpers
  */
 
+import {
+  isStreamLive,
+  stopStreamTracks,
+  releaseVideoElement,
+  stopAllCameraStreams,
+  requestManagedCamera,
+  cancelPendingCameraSession,
+  getActiveStreamsCount,
+} from './cameraManager.js';
+
+export {
+  isStreamLive,
+  stopStreamTracks,
+  releaseVideoElement,
+  stopAllCameraStreams,
+  requestManagedCamera,
+  cancelPendingCameraSession,
+  getActiveStreamsCount,
+};
+
 export const ProctoringState = {
   CAMERA_INITIALIZING: 'CAMERA_INITIALIZING',
   CAMERA_ACTIVE_PENDING: 'CAMERA_ACTIVE_PENDING',
@@ -47,43 +67,18 @@ export const STATE_CONFIG = {
  * Checks whether a MediaStream is active, valid, and has a live unmuted video track.
  */
 export function isCameraStreamLive(stream) {
-  if (!stream || !stream.active) return false;
-  const tracks = stream.getVideoTracks ? stream.getVideoTracks() : [];
-  if (!tracks || tracks.length === 0) return false;
-  const track = tracks[0];
-  return track.readyState === 'live' && track.enabled === true && !track.muted;
+  return isStreamLive(stream);
 }
 
 /**
  * Completely stops all tracks of a stream and releases the video element.
+ * Idempotent.
  */
 export function stopMediaStream(stream, videoElement = null) {
   if (stream) {
-    try {
-      const tracks = stream.getTracks ? stream.getTracks() : [];
-      tracks.forEach((track) => {
-        try {
-          track.stop();
-          track.enabled = false;
-        } catch {}
-      });
-    } catch {}
+    stopStreamTracks(stream);
   }
-
   if (videoElement) {
-    try {
-      if (videoElement.srcObject && videoElement.srcObject !== stream) {
-        const vTracks = videoElement.srcObject.getTracks ? videoElement.srcObject.getTracks() : [];
-        vTracks.forEach((t) => {
-          try {
-            t.stop();
-            t.enabled = false;
-          } catch {}
-        });
-      }
-      videoElement.srcObject = null;
-      videoElement.pause();
-    } catch {}
+    releaseVideoElement(videoElement);
   }
 }
-

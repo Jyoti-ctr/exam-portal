@@ -40,14 +40,25 @@ def grade_mcq_attempt(attempt):
         if total_objective < Decimal('0.0'):
             total_objective = Decimal('0.0')
 
-        result, _ = ExamResult.objects.update_or_create(
-            attempt=attempt,
-            defaults={
-                'exam': exam,
-                'student': attempt.student,
-                'objective_score': total_objective,
-                'is_published': False,  # Kept private until faculty release
-            }
-        )
-        result.recalculate()
-        return result
+        has_descriptive = exam.questions.filter(question_type=Question.QuestionType.DESCRIPTIVE).exists()
+        initial_status = ExamResult.ReviewStatus.PENDING_REVIEW if has_descriptive else ExamResult.ReviewStatus.SUBMITTED
+
+        existing = ExamResult.objects.filter(attempt=attempt).first()
+        if existing:
+            existing.objective_score = total_objective
+            # Only reset status if still in preliminary submitted/pending states
+            if existing.review_status in [ExamResult.ReviewStatus.SUBMITTED, ExamResult.ReviewStatus.PENDING_REVIEW]:
+                existing.review_status = initial_status
+            existing.recalculate()
+            return existing
+        else:
+            result = ExamResult.objects.create(
+                attempt=attempt,
+                exam=exam,
+                student=attempt.student,
+                objective_score=total_objective,
+                is_published=False,  # Kept private until faculty release
+                review_status=initial_status,
+            )
+            result.recalculate()
+            return result

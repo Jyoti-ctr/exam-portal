@@ -1,5 +1,5 @@
 import React, { useState } from 'react';
-import { useNavigate } from 'react-router-dom';
+import { useNavigate, Link } from 'react-router-dom';
 import { useAuth } from '../context/AuthContext';
 
 export const Login = () => {
@@ -96,6 +96,13 @@ export const Login = () => {
             {loading ? 'Authenticating...' : 'Sign In'}
           </button>
         </form>
+
+        <div style={{ marginTop: '16px', textAlign: 'center', fontSize: '13px', color: 'var(--gray-600)' }}>
+          Don't have an account?{' '}
+          <Link to="/register" style={{ color: 'var(--primary)', fontWeight: '600', textDecoration: 'none' }}>
+            Register as Student
+          </Link>
+        </div>
 
         <div style={{ marginTop: '24px', paddingTop: '20px', borderTop: '1px solid var(--gray-200)' }}>
           <p style={{ fontSize: '12px', color: 'var(--gray-500)', textAlign: 'center', marginBottom: '10px', fontWeight: '600' }}>

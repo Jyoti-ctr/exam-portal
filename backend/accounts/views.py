@@ -3,7 +3,28 @@ from rest_framework.response import Response
 from rest_framework import status, permissions
 from rest_framework.authtoken.models import Token
 from django.contrib.auth import login, logout
-from .serializers import LoginSerializer, UserSerializer
+from .serializers import LoginSerializer, UserSerializer, StudentRegisterSerializer
+
+
+class RegisterView(APIView):
+    """
+    POST: Public registration for students.
+    Validates account uniqueness and creates Student user + profile.
+    """
+    permission_classes = [permissions.AllowAny]
+
+    def post(self, request):
+        serializer = StudentRegisterSerializer(data=request.data)
+        serializer.is_valid(raise_exception=True)
+        user = serializer.save()
+
+        token, _ = Token.objects.get_or_create(user=user)
+        login(request, user)  # Synchronize session for hybrid use
+
+        return Response({
+            'token': token.key,
+            'user': UserSerializer(user).data
+        }, status=status.HTTP_201_CREATED)
 
 
 class LoginView(APIView):

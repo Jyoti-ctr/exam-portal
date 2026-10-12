@@ -4,6 +4,7 @@ import { studentAPI } from '../../api/client';
 import { Timer } from '../../components/Timer';
 import { ProctoringBadge } from '../../components/ProctoringBadge';
 import { ConfirmModal } from '../../components/ConfirmModal';
+import { stopAllCameraStreams } from '../../utils/cameraManager';
 
 export const ExamRoom = () => {
   const { examId } = useParams();
@@ -27,6 +28,13 @@ export const ExamRoom = () => {
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState(null);
 
+  // Guarantee all hardware camera tracks are killed upon component unmount
+  useEffect(() => {
+    return () => {
+      stopAllCameraStreams();
+    };
+  }, []);
+
   // Initialize or resume attempt
   useEffect(() => {
     let isMounted = true;
@@ -40,6 +48,7 @@ export const ExamRoom = () => {
 
         // If attempt is already completed or expired, redirect to submitted page
         if (attemptData.is_completed) {
+          stopAllCameraStreams();
           navigate('/student/submitted', {
             state: {
               examTitle: attemptData.exam_title,
@@ -219,19 +228,17 @@ export const ExamRoom = () => {
     handleFinalSubmit(true);
   };
 
+  const [submissionError, setSubmissionError] = useState(null);
+
   const handleFinalSubmit = async (isAuto = false) => {
     if (submitting || !attempt?.id) return;
     setSubmitting(true);
-
-    // Immediately release and turn off camera hardware upon exam submission
-    if (window.__stopExamWebcam) {
-      try {
-        window.__stopExamWebcam();
-      } catch {}
-    }
+    setSubmissionError(null);
 
     try {
       await studentAPI.submitAttempt(attempt.id);
+      // Stop all camera media tracks immediately upon confirmed submission
+      stopAllCameraStreams();
       if (document.fullscreenElement) {
         document.exitFullscreen().catch(() => {});
       }
@@ -245,6 +252,10 @@ export const ExamRoom = () => {
     } catch (err) {
       // Even if network glitches, attempt might already be finalized
       if (err.response?.data?.status === 'already_submitted') {
+        stopAllCameraStreams();
+        if (document.fullscreenElement) {
+          document.exitFullscreen().catch(() => {});
+        }
         navigate('/student/submitted', {
           state: {
             examTitle: attempt.exam_title,
@@ -253,7 +264,8 @@ export const ExamRoom = () => {
           },
         });
       } else {
-        alert('Error submitting exam. Please check your network connection.');
+        const msg = err.response?.data?.error || err.response?.data?.message || 'Network error encountered during final submission. Your answers are saved on the server. Please click "Retry Submission" to complete.';
+        setSubmissionError(msg);
         setSubmitting(false);
       }
     }
@@ -320,6 +332,51 @@ export const ExamRoom = () => {
           >
             ✕
           </button>
+        </div>
+      )}
+
+      {/* Submission Failure Recovery Banner */}
+      {submissionError && (
+        <div
+          style={{
+            background: '#fef2f2',
+            borderBottom: '2px solid #ef4444',
+            color: '#991b1b',
+            padding: '12px 20px',
+            fontSize: '14px',
+            fontWeight: '600',
+            display: 'flex',
+            justifyContent: 'space-between',
+            alignItems: 'center',
+            position: 'sticky',
+            top: 0,
+            zIndex: 101,
+          }}
+        >
+          <div style={{ display: 'flex', alignItems: 'center', gap: '12px' }}>
+            <span style={{ fontSize: '18px' }}>⚠️</span>
+            <div>
+              <div>{submissionError}</div>
+              <div style={{ fontSize: '12px', fontWeight: '400', color: '#b91c1c' }}>
+                Your autosaved answers are securely preserved on the server.
+              </div>
+            </div>
+          </div>
+          <div style={{ display: 'flex', gap: '10px' }}>
+            <button
+              onClick={() => handleFinalSubmit(false)}
+              className="btn btn-primary btn-sm"
+              style={{ background: '#b91c1c', borderColor: '#991b1b' }}
+            >
+              ↻ Retry Submission
+            </button>
+            <button
+              onClick={() => setSubmissionError(null)}
+              style={{ background: 'none', border: 'none', color: '#991b1b', cursor: 'pointer', fontWeight: 'bold' }}
+            >
+              ✕
+            </button>
+          </div>
         </div>
       )}
 

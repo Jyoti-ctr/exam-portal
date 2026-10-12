@@ -140,7 +140,7 @@ export const FacultyDashboard = () => {
                           Attempts
                         </Link>
                         <Link to={`/faculty/exams/${exam.id}/results`} className="btn btn-secondary btn-sm">
-                          Results & Grade
+                          Marking & Review 📝
                         </Link>
                         <Link to={`/faculty/exams/${exam.id}/edit`} className="btn btn-secondary btn-sm">
                           Edit

@@ -13,11 +13,13 @@ class AttemptModelTests(TestCase):
     def setUp(self):
         self.student = User.objects.create_user(
             username='student_alice',
+            email='student_alice@example.com',
             password='testpassword123',
             role=User.Role.STUDENT
         )
         self.faculty = User.objects.create_user(
             username='faculty_bob',
+            email='faculty_bob@example.com',
             password='testpassword123',
             role=User.Role.FACULTY
         )

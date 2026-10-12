@@ -1,17 +1,14 @@
 import React, { useEffect } from 'react';
 import { useLocation, Link } from 'react-router-dom';
+import { stopAllCameraStreams } from '../../utils/cameraManager';
 
 export const SubmissionSuccess = () => {
   const location = useLocation();
   const { examTitle, submittedAt, isAuto } = location.state || {};
 
   useEffect(() => {
-    // Explicit safety assurance: shut down camera feed once submission is finalized
-    if (window.__stopExamWebcam) {
-      try {
-        window.__stopExamWebcam();
-      } catch {}
-    }
+    // Explicit safety assurance: unconditionally stop every camera stream on completion
+    stopAllCameraStreams();
   }, []);
 
   return (

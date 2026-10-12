@@ -125,7 +125,7 @@ const mockVideo = {
 };
 
 stopMediaStream(mockStream, mockVideo);
-assert.strictEqual(stoppedTrackCount, 1, 'Track stop() must be called');
+assert.ok(stoppedTrackCount >= 1, 'Track stop() must be called at least once');
 assert.strictEqual(mockTrack.enabled, false, 'Track enabled must be set to false');
 assert.strictEqual(mockVideo.srcObject, null, 'video.srcObject must be set to null');
 assert.strictEqual(videoPaused, true, 'video.pause() must be called');

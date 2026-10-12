@@ -13,11 +13,13 @@ class ResultModelTests(TestCase):
     def test_result_recalculate_and_pass_fail(self):
         faculty = User.objects.create_user(
             username='evaluator',
+            email='evaluator@example.com',
             password='testpassword123',
             role=User.Role.FACULTY
         )
         student = User.objects.create_user(
             username='test_student',
+            email='test_student@example.com',
             password='testpassword123',
             role=User.Role.STUDENT
         )
