@@ -199,6 +199,11 @@ class FacultyAttemptReviewDetailView(APIView):
                 'marks': float(q.marks),
                 'negative_marks': float(q.negative_marks),
                 'order': q.order,
+                'image': q.image.url if q.image else None,
+                'image_url': q.image_url,
+                'correct_answer_data': q.correct_answer_data,
+                'question_metadata': q.question_metadata,
+                'manual_grading': q.manual_grading,
                 'options': [
                     {
                         'id': opt.id,
@@ -212,6 +217,7 @@ class FacultyAttemptReviewDetailView(APIView):
                     'id': ans.id if ans else None,
                     'selected_option_id': ans.selected_option_id if ans else None,
                     'text_response': ans.text_response if ans else '',
+                    'answer_data': ans.answer_data if ans else {},
                     'awarded_marks': float(ans.awarded_marks) if ans and ans.awarded_marks is not None else None,
                     'evaluator_comment': ans.evaluator_comment if ans else '',
                     'is_marked_for_review': ans.is_marked_for_review if ans else False,
@@ -228,6 +234,9 @@ class FacultyAttemptReviewDetailView(APIView):
                 'status': attempt.status,
                 'started_at': attempt.started_at,
                 'submitted_at': attempt.submitted_at,
+                'submission_reason': attempt.submission_reason,
+                'warning_count': attempt.warning_count,
+                'navigation_mode': attempt.exam.navigation_mode,
                 'is_completed': attempt.is_completed,
                 'student_id': attempt.student_id,
                 'student_username': attempt.student.username,
@@ -240,6 +249,8 @@ class FacultyAttemptReviewDetailView(APIView):
                 'title': exam.title,
                 'total_marks': float(exam.total_marks),
                 'pass_marks': float(exam.pass_marks),
+                'navigation_mode': exam.navigation_mode,
+                'warning_threshold': exam.warning_threshold,
             },
             'result': ExamResultSerializer(result, context={'request': request}).data,
             'questions': questions_data,
@@ -317,9 +328,11 @@ class FacultySaveReviewView(APIView):
                             ans.evaluator_comment = qm['feedback']
                         ans.save()
 
-            # Recalculate total descriptive score
+            # Recalculate total descriptive/manual score
+            from django.db.models import Q
             desc_answers = attempt.answers.filter(
-                question__question_type=Question.QuestionType.DESCRIPTIVE,
+                Q(question__question_type__in=[Question.QuestionType.DESCRIPTIVE, Question.QuestionType.CODE]) |
+                Q(question__manual_grading=True),
                 awarded_marks__isnull=False
             )
             total_desc = sum(a.awarded_marks for a in desc_answers)

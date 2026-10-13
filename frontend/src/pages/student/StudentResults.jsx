@@ -18,9 +18,9 @@ export const StudentResults = () => {
   const [clarifyModalOpen, setClarifyModalOpen] = useState(false);
   const [clarifyMessage, setClarifyMessage] = useState('');
 
-  const fetchResults = async () => {
+  const fetchResults = async (showLoading = false) => {
     try {
-      setLoading(true);
+      if (showLoading) setLoading(true);
       const res = await studentAPI.getPublishedResults();
       setResults(res.data);
     } catch {
@@ -31,7 +31,7 @@ export const StudentResults = () => {
   };
 
   useEffect(() => {
-    fetchResults();
+    fetchResults(false);
   }, []);
 
   const handleOpenAcknowledge = (resultId) => {

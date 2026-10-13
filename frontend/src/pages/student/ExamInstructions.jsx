@@ -46,55 +46,123 @@ export const ExamInstructions = () => {
     );
   }
 
+  const isForwardOnly = exam.navigation_mode === 'FORWARD_ONLY';
+  const warningLimit = exam.warning_threshold || 8;
+
   return (
-    <div className="page-container" style={{ maxWidth: '800px' }}>
+    <div className="page-container" style={{ maxWidth: '840px' }}>
       <div className="card" style={{ padding: '36px' }}>
         <div style={{ borderBottom: '1px solid var(--gray-200)', paddingBottom: '20px', marginBottom: '24px' }}>
-          <span className="badge badge-neutral" style={{ marginBottom: '8px' }}>EXAMINATION INSTRUCTIONS</span>
+          <span className="badge badge-neutral" style={{ marginBottom: '8px' }}>EXAMINATION INSTRUCTIONS & RULES</span>
           <h1 style={{ fontSize: '26px', fontWeight: '800', color: 'var(--gray-900)', margin: '4px 0 8px 0' }}>
             {exam.title}
           </h1>
           <p style={{ color: 'var(--gray-600)', fontSize: '14px' }}>
-            {exam.description}
+            {exam.description || 'Please review all rules, navigation policies, and integrity guidelines carefully before commencing your attempt.'}
           </p>
         </div>
 
-        <div className="grid-3" style={{ marginBottom: '28px' }}>
+        {/* Highlighted Navigation Policy Box */}
+        <div
+          style={{
+            background: isForwardOnly ? '#eff6ff' : '#f0fdf4',
+            border: isForwardOnly ? '2px solid #3b82f6' : '2px solid #22c55e',
+            borderRadius: '8px',
+            padding: '16px 20px',
+            marginBottom: '24px',
+          }}
+        >
+          <div style={{ display: 'flex', alignItems: 'center', gap: '8px', marginBottom: '4px' }}>
+            <span style={{ fontSize: '18px' }}>{isForwardOnly ? '➡️' : '⇄'}</span>
+            <strong style={{ fontSize: '15px', color: isForwardOnly ? '#1e40af' : '#15803d' }}>
+              {isForwardOnly ? 'Question Navigation: Forward Only' : 'Question Navigation: Forward and Backward'}
+            </strong>
+          </div>
+          <p style={{ fontSize: '14px', color: isForwardOnly ? '#1e3a8a' : '#166534', margin: 0, lineHeight: '1.5' }}>
+            {isForwardOnly ? (
+              <>
+                <strong>Question Navigation: Forward Only.</strong> You can move to the next question, but once you leave a question, you cannot return to it. Check your answer before proceeding.
+              </>
+            ) : (
+              <>
+                <strong>Question Navigation: Forward and Backward.</strong> You can revisit previous questions and change your answers until you submit the exam or time expires.
+              </>
+            )}
+          </p>
+        </div>
+
+        {/* Exam Overview Grid */}
+        <div style={{ display: 'grid', gridTemplateColumns: 'repeat(4, 1fr)', gap: '14px', marginBottom: '28px' }}>
           <div className="stat-card">
             <span className="stat-label">Duration</span>
             <span className="stat-value">{exam.duration_minutes}m</span>
+          </div>
+          <div className="stat-card">
+            <span className="stat-label">Total Questions</span>
+            <span className="stat-value">{exam.question_count || 'Configured'}</span>
           </div>
           <div className="stat-card">
             <span className="stat-label">Total Marks</span>
             <span className="stat-value">{exam.total_marks}</span>
           </div>
           <div className="stat-card">
-            <span className="stat-label">Pass Marks</span>
-            <span className="stat-value">{exam.pass_marks}</span>
+            <span className="stat-label">Negative Marks</span>
+            <span className="stat-value" style={{ fontSize: '16px', color: exam.has_negative_marking ? 'var(--danger)' : 'var(--success)' }}>
+              {exam.has_negative_marking ? 'Yes (Applicable)' : 'None'}
+            </span>
           </div>
         </div>
 
-        <div style={{ background: 'var(--gray-50)', padding: '20px', borderRadius: '8px', border: '1px solid var(--gray-200)', marginBottom: '24px' }}>
-          <h3 style={{ fontSize: '16px', fontWeight: '700', marginBottom: '12px', color: 'var(--gray-900)' }}>
-            Rules & Proctoring Guidelines:
+        {/* Warning Policy Box */}
+        <div style={{ background: '#fffbeb', border: '1px solid #fde68a', padding: '20px', borderRadius: '8px', marginBottom: '24px' }}>
+          <h3 style={{ fontSize: '16px', fontWeight: '700', color: '#92400e', marginBottom: '10px', display: 'flex', alignItems: 'center', gap: '8px' }}>
+            <span>⚠️</span> Warning Policy & Automatic Submission Rule
           </h3>
-          <ul style={{ fontSize: '14px', color: 'var(--gray-700)', paddingLeft: '20px', display: 'flex', flexDirection: 'column', gap: '8px', lineHeight: '1.6' }}>
-            <li><strong>Server-Authoritative Clock:</strong> Your timer starts the moment you click "Start Exam". If time runs out, the server will automatically submit your attempt.</li>
-            <li><strong>Automatic Answer Saving:</strong> Every answer you select or type is continuously autosaved. You can review and change your choices anytime before final submission.</li>
-            <li><strong>Accidental Disconnection / Refresh:</strong> If your browser closes or network disconnects temporarily, you can re-open the exam room and resume from where you left off.</li>
-            <li><strong>Integrity Monitoring:</strong> Fullscreen mode, tab switches, and webcam permissions are logged for faculty audit. Please stay focused on the exam screen.</li>
+          <ul style={{ fontSize: '13.5px', color: '#78350f', paddingLeft: '20px', display: 'flex', flexDirection: 'column', gap: '6px', lineHeight: '1.5' }}>
+            <li>
+              <strong>Violation Monitoring:</strong> The student receives an authoritative warning each time a qualifying exam violation is detected (leaving the exam tab, losing window focus, exiting fullscreen mode, or camera interruptions).
+            </li>
+            <li>
+              <strong>Warning 1 through Warning {warningLimit}:</strong> You may continue the exam subject to the standard exam rules.
+            </li>
+            <li>
+              <strong>Warning {warningLimit} (Final Warning):</strong> A prominent alert will notify you that exactly one more qualifying violation will trigger automatic submission.
+            </li>
+            <li>
+              <strong>Warning {warningLimit + 1} (Automatic Final Submission):</strong> If the warning count exceeds {warningLimit}, the server will <strong>automatically submit the exam immediately</strong> and lock all answers from further changes.
+            </li>
+            {exam.is_camera_mandatory && (
+              <li>
+                <strong>Mandatory Camera Requirement:</strong> Webcam monitoring is mandatory for this exam. Disconnecting or revoking camera access counts as a qualifying violation.
+              </li>
+            )}
           </ul>
         </div>
 
-        <div style={{ marginBottom: '28px' }}>
-          <label className="form-check" style={{ fontSize: '14px', fontWeight: '500' }}>
+        {/* General Guidelines */}
+        <div style={{ background: 'var(--gray-50)', padding: '20px', borderRadius: '8px', border: '1px solid var(--gray-200)', marginBottom: '24px' }}>
+          <h3 style={{ fontSize: '15px', fontWeight: '700', marginBottom: '10px', color: 'var(--gray-900)' }}>
+            Exam Session Guidelines:
+          </h3>
+          <ul style={{ fontSize: '13.5px', color: 'var(--gray-700)', paddingLeft: '20px', display: 'flex', flexDirection: 'column', gap: '6px', lineHeight: '1.5' }}>
+            <li><strong>Server-Authoritative Clock:</strong> Your timer starts the moment you click "Start Exam". If time expires, the server automatically finalizes submission.</li>
+            <li><strong>Continuous Autosave:</strong> Every choice or text entered is autosaved on the server.</li>
+            <li><strong>Technical Issues:</strong> Ordinary network glitches or brief reconnections do not count as cheating. If your connection drops, refresh to resume.</li>
+          </ul>
+        </div>
+
+        {/* Student Acknowledgment */}
+        <div style={{ marginBottom: '28px', background: '#f8fafc', padding: '16px', borderRadius: '8px', border: '1px solid #cbd5e1' }}>
+          <label className="form-check" style={{ fontSize: '14px', fontWeight: '600', color: 'var(--gray-900)' }}>
             <input
               type="checkbox"
               checked={agreed}
               onChange={(e) => setAgreed(e.target.checked)}
               style={{ width: '18px', height: '18px', accentColor: 'var(--primary)' }}
             />
-            <span>I have read and agree to the examination rules and understand that audit events are recorded.</span>
+            <span>
+              I have read and acknowledge the examination navigation rules ({isForwardOnly ? 'Forward Only' : 'Forward and Backward'}) and the {warningLimit}-warning automatic submission policy.
+            </span>
           </label>
         </div>
 

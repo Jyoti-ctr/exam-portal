@@ -36,11 +36,11 @@ export function stopStreamTracks(stream, videoElement = null) {
         try {
           track.stop();
           track.enabled = false;
-        } catch (e) {
+        } catch {
           // Safe ignore on already stopped tracks
         }
       });
-    } catch (e) {
+    } catch {
       // Safe ignore
     }
     activeStreams.delete(stream);
@@ -71,7 +71,7 @@ export function releaseVideoElement(videoElement) {
     if (typeof videoElement.pause === 'function') {
       videoElement.pause();
     }
-  } catch (e) {
+  } catch {
     // Safe ignore
   }
 }
@@ -118,7 +118,9 @@ export async function requestManagedCamera(constraints, onSessionCancelled = nul
           if (typeof originalOnEnded === 'function') originalOnEnded(e);
         };
       });
-    } catch {}
+    } catch {
+      // Ignored
+    }
 
     return { stream, sessionId, cancelled: false };
   } catch (err) {

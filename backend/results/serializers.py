@@ -33,6 +33,9 @@ class ExamResultSerializer(serializers.ModelSerializer):
     exam_pass_marks = serializers.DecimalField(source='exam.pass_marks', max_digits=6, decimal_places=2, read_only=True)
     review_status_display = serializers.CharField(source='get_review_status_display', read_only=True)
     history = ReviewHistorySerializer(source='review_history', many=True, read_only=True)
+    warning_count = serializers.IntegerField(source='attempt.warning_count', read_only=True)
+    submission_reason = serializers.CharField(source='attempt.submission_reason', read_only=True)
+    navigation_mode = serializers.CharField(source='exam.navigation_mode', read_only=True)
 
     class Meta:
         model = ExamResult
@@ -45,6 +48,9 @@ class ExamResultSerializer(serializers.ModelSerializer):
             'student_name',
             'student_username',
             'roll_number',
+            'warning_count',
+            'submission_reason',
+            'navigation_mode',
             'objective_score',
             'descriptive_score',
             'total_score',

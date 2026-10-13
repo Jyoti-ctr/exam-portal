@@ -18,9 +18,9 @@ export const AttemptMonitor = () => {
   const [actionInProgress, setActionInProgress] = useState(false);
   const [incidentNotes, setIncidentNotes] = useState({});
 
-  const loadData = async () => {
+  const loadData = async (showLoading = false) => {
     try {
-      setLoading(true);
+      if (showLoading) setLoading(true);
       const [examRes, attemptsRes] = await Promise.all([
         facultyAPI.getExam(examId),
         facultyAPI.getAttempts(examId),
@@ -35,7 +35,7 @@ export const AttemptMonitor = () => {
   };
 
   useEffect(() => {
-    loadData();
+    loadData(false);
   }, [examId]);
 
   const handleOpenReview = async (attemptId) => {
@@ -167,8 +167,9 @@ export const AttemptMonitor = () => {
                 <tr>
                   <th>Student & Attempt</th>
                   <th>Session Status</th>
-                  <th>Started At</th>
-                  <th>Deadline / Submitted</th>
+                  <th>Navigation</th>
+                  <th>Warnings</th>
+                  <th>Submission Type</th>
                   <th>Answers Saved</th>
                   <th>AI Proctoring Review</th>
                 </tr>
@@ -188,18 +189,52 @@ export const AttemptMonitor = () => {
                       {att.status === 'SUBMITTED' ? (
                         <span className="badge badge-success">Submitted</span>
                       ) : att.status === 'AUTO_SUBMITTED' ? (
-                        <span className="badge badge-danger">Auto-Submitted (Expired)</span>
+                        <span className="badge badge-danger">
+                          Auto-Submitted
+                        </span>
                       ) : att.status === 'IN_PROGRESS' ? (
-                        <span className="badge badge-warning">In Progress ({Math.floor(att.remaining_seconds / 60)}m left)</span>
+                        <span className="badge badge-warning">In Progress ({Math.floor((att.remaining_seconds || 0) / 60)}m left)</span>
                       ) : (
                         <span className="badge badge-neutral">{att.status}</span>
                       )}
                     </td>
-                    <td>{new Date(att.started_at).toLocaleTimeString()}</td>
                     <td>
-                      {att.is_completed
-                        ? `Finalized: ${new Date(att.submitted_at || att.expires_at).toLocaleTimeString()}`
-                        : `Hard Deadline: ${new Date(att.expires_at).toLocaleTimeString()}`}
+                      <span className="badge badge-neutral" style={{ fontSize: '11px' }}>
+                        {att.navigation_mode === 'FORWARD_ONLY' ? 'Forward Only' : 'Forward & Backward'}
+                      </span>
+                    </td>
+                    <td>
+                      <span
+                        className={`badge ${
+                          (att.warning_count || 0) >= 8
+                            ? 'badge-danger'
+                            : (att.warning_count || 0) > 0
+                            ? 'badge-warning'
+                            : 'badge-neutral'
+                        }`}
+                        style={{ fontWeight: '700' }}
+                      >
+                        ⚠️ {att.warning_count || 0} / {att.max_warnings || att.warning_threshold || 8}
+                      </span>
+                    </td>
+                    <td>
+                      {att.submission_reason === 'warning_threshold_exceeded' ? (
+                        <span className="badge badge-danger" title="Automatically submitted after exceeding 8 warnings">
+                          Auto (8+ Warnings)
+                        </span>
+                      ) : att.submission_reason === 'time_expired' ? (
+                        <span className="badge badge-warning" title="Automatically submitted when timer expired">
+                          Auto (Timeout)
+                        </span>
+                      ) : att.submission_reason === 'manual' ? (
+                        <span className="badge badge-success">
+                          Manual
+                        </span>
+                      ) : att.is_completed ? (
+                        <span className="badge badge-neutral">Submitted</span>
+                      ) : (
+                        <span style={{ color: 'var(--gray-400)', fontSize: '12px' }}>In progress</span>
+                      )}
                     </td>
                     <td>
                       <strong>{(att.saved_answers || []).length}</strong> responses saved
@@ -242,8 +277,14 @@ export const AttemptMonitor = () => {
                 <h2 style={{ fontSize: '20px', fontWeight: '800', margin: 0 }}>
                   AI-Assisted Proctoring Review
                 </h2>
-                <div style={{ fontSize: '13px', color: 'var(--gray-500)', marginTop: '2px' }}>
-                  Attempt #{selectedAttemptId} • Student: {analysis?.student_name || 'Examinee'}
+                <div style={{ fontSize: '13px', color: 'var(--gray-500)', marginTop: '2px', display: 'flex', gap: '10px', alignItems: 'center' }}>
+                  <span>Attempt #{selectedAttemptId} • Student: {analysis?.student_name || 'Examinee'}</span>
+                  {attempts.find(a => a.id === selectedAttemptId) && (
+                    <span className="badge badge-neutral" style={{ fontSize: '11px' }}>
+                      Warnings: {attempts.find(a => a.id === selectedAttemptId).warning_count || 0} / {attempts.find(a => a.id === selectedAttemptId).max_warnings || 8}
+                      {attempts.find(a => a.id === selectedAttemptId).submission_reason && ` • Submission: ${attempts.find(a => a.id === selectedAttemptId).submission_reason}`}
+                    </span>
+                  )}
                 </div>
               </div>
               <button onClick={() => setSelectedAttemptId(null)} className="btn btn-secondary btn-sm">

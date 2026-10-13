@@ -11,9 +11,9 @@ export const FacultyDashboard = () => {
   const [error, setError] = useState(null);
   const [deleteModalId, setDeleteModalId] = useState(null);
 
-  const fetchExams = async () => {
+  const fetchExams = async (showLoading = false) => {
     try {
-      setLoading(true);
+      if (showLoading) setLoading(true);
       const res = await facultyAPI.getExams();
       setExams(res.data);
     } catch {
@@ -24,7 +24,7 @@ export const FacultyDashboard = () => {
   };
 
   useEffect(() => {
-    fetchExams();
+    fetchExams(false);
   }, []);
 
   const handleTogglePublish = async (examId) => {

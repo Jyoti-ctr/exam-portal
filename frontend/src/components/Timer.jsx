@@ -1,23 +1,32 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 
 export const Timer = ({ initialSeconds, onExpire }) => {
-  const [secondsLeft, setSecondsLeft] = useState(initialSeconds);
+  const [secondsLeft, setSecondsLeft] = useState(initialSeconds || 0);
+  const onExpireRef = useRef(onExpire);
+  const hasExpiredRef = useRef(false);
 
   useEffect(() => {
-    setSecondsLeft(initialSeconds);
+    onExpireRef.current = onExpire;
+  }, [onExpire]);
+
+  useEffect(() => {
+    if (typeof initialSeconds === 'number') {
+      setSecondsLeft(initialSeconds);
+      if (initialSeconds > 0) {
+        hasExpiredRef.current = false;
+      }
+    }
   }, [initialSeconds]);
 
   useEffect(() => {
-    if (secondsLeft <= 0) {
-      if (onExpire) onExpire();
-      return;
-    }
-
     const interval = setInterval(() => {
       setSecondsLeft((prev) => {
         if (prev <= 1) {
           clearInterval(interval);
-          if (onExpire) onExpire();
+          if (!hasExpiredRef.current) {
+            hasExpiredRef.current = true;
+            onExpireRef.current?.();
+          }
           return 0;
         }
         return prev - 1;
@@ -25,7 +34,7 @@ export const Timer = ({ initialSeconds, onExpire }) => {
     }, 1000);
 
     return () => clearInterval(interval);
-  }, [secondsLeft, onExpire]);
+  }, []);
 
   const formatTime = (totalSeconds) => {
     const hours = Math.floor(totalSeconds / 3600);

@@ -53,6 +53,7 @@ export const studentAPI = {
   getExamInstructions: (examId) => api.get(`/student/exams/${examId}/`),
   startOrResumeAttempt: (examId) => api.post(`/student/exams/${examId}/start/`),
   autosaveAnswer: (attemptId, payload) => api.post(`/student/attempts/${attemptId}/autosave/`, payload),
+  advanceQuestion: (attemptId, payload = {}) => api.post(`/student/attempts/${attemptId}/advance/`, payload),
   heartbeat: (attemptId) => api.post(`/student/attempts/${attemptId}/heartbeat/`),
   submitAttempt: (attemptId) => api.post(`/student/attempts/${attemptId}/submit/`),
   logProctoringEvent: (payload) => api.post('/student/events/', payload),
@@ -72,8 +73,14 @@ export const facultyAPI = {
   togglePublish: (examId) => api.post(`/faculty/exams/${examId}/toggle-publish/`),
   
   getQuestions: (examId) => api.get(`/faculty/exams/${examId}/questions/`),
-  createQuestion: (examId, data) => api.post(`/faculty/exams/${examId}/questions/`, data),
-  updateQuestion: (questionId, data) => api.put(`/faculty/questions/${questionId}/`, data),
+  createQuestion: (examId, data) => {
+    const isFormData = typeof FormData !== 'undefined' && data instanceof FormData;
+    return api.post(`/faculty/exams/${examId}/questions/`, data, isFormData ? { headers: { 'Content-Type': 'multipart/form-data' } } : {});
+  },
+  updateQuestion: (questionId, data) => {
+    const isFormData = typeof FormData !== 'undefined' && data instanceof FormData;
+    return api.put(`/faculty/questions/${questionId}/`, data, isFormData ? { headers: { 'Content-Type': 'multipart/form-data' } } : {});
+  },
   deleteQuestion: (questionId) => api.delete(`/faculty/questions/${questionId}/`),
 
   getAttempts: (examId) => api.get(`/faculty/exams/${examId}/attempts/`),

@@ -40,9 +40,9 @@ export const ResultEvaluation = () => {
   const [flagReason, setFlagReason] = useState('');
   const [targetAttemptId, setTargetAttemptId] = useState(null);
 
-  const loadData = async () => {
+  const loadData = async (showLoading = false) => {
     try {
-      setLoading(true);
+      if (showLoading) setLoading(true);
       const [examRes, subsRes] = await Promise.all([
         facultyAPI.getExam(examId),
         facultyAPI.getSubmissions(examId),
@@ -57,7 +57,7 @@ export const ResultEvaluation = () => {
   };
 
   useEffect(() => {
-    loadData();
+    loadData(false);
   }, [examId]);
 
   const handleOpenReview = async (attemptId) => {
@@ -101,7 +101,8 @@ export const ResultEvaluation = () => {
 
     // Validate marks before sending
     for (const q of reviewDetail.questions || []) {
-      if (q.question_type === 'DESCRIPTIVE' && q.student_answer?.id) {
+      const isManual = q.manual_grading || q.question_type === 'DESCRIPTIVE' || q.question_type === 'CODE';
+      if (isManual && q.student_answer?.id) {
         const val = marksState[q.student_answer.id];
         if (val !== undefined && val !== '') {
           const num = parseFloat(val);
@@ -301,6 +302,21 @@ export const ResultEvaluation = () => {
                         <div style={{ fontSize: '12px', color: 'var(--gray-500)' }}>
                           Roll No: {sub.roll_number || 'N/A'} • @{sub.student_username}
                         </div>
+                        <div style={{ display: 'flex', gap: '6px', marginTop: '4px', flexWrap: 'wrap' }}>
+                          <span className={`badge ${(sub.warning_count || 0) >= 8 ? 'badge-danger' : (sub.warning_count || 0) > 0 ? 'badge-warning' : 'badge-neutral'}`} style={{ fontSize: '10px' }}>
+                            ⚠️ {sub.warning_count || 0} Warnings
+                          </span>
+                          {sub.submission_reason === 'warning_threshold_exceeded' && (
+                            <span className="badge badge-danger" style={{ fontSize: '10px' }}>
+                              Auto (8+ Warnings)
+                            </span>
+                          )}
+                          {sub.submission_reason === 'time_expired' && (
+                            <span className="badge badge-warning" style={{ fontSize: '10px' }}>
+                              Auto (Timeout)
+                            </span>
+                          )}
+                        </div>
                       </td>
 
                       <td style={{ fontSize: '13px', color: 'var(--gray-600)' }}>
@@ -408,8 +424,19 @@ export const ResultEvaluation = () => {
                     </span>
                   )}
                 </div>
-                <div style={{ fontSize: '13px', color: 'var(--gray-600)', marginTop: '4px' }}>
-                  Student: <strong>{reviewDetail?.attempt?.student_name}</strong> (Roll: {reviewDetail?.attempt?.roll_number || 'N/A'}) • Attempt #{reviewDetail?.attempt?.attempt_number} • Submitted: {new Date(reviewDetail?.attempt?.submitted_at || Date.now()).toLocaleString()}
+                <div style={{ fontSize: '13px', color: 'var(--gray-600)', marginTop: '4px', display: 'flex', gap: '10px', alignItems: 'center', flexWrap: 'wrap' }}>
+                  <span>Student: <strong>{reviewDetail?.attempt?.student_name}</strong> (Roll: {reviewDetail?.attempt?.roll_number || 'N/A'}) • Attempt #{reviewDetail?.attempt?.attempt_number} • Submitted: {reviewDetail?.attempt?.submitted_at ? new Date(reviewDetail.attempt.submitted_at).toLocaleString() : 'N/A'}</span>
+                  <span className="badge badge-neutral" style={{ fontSize: '11px' }}>
+                    ⚠️ Warnings: {reviewDetail?.attempt?.warning_count || 0} / {reviewDetail?.exam?.warning_threshold || 8}
+                  </span>
+                  <span className="badge badge-neutral" style={{ fontSize: '11px' }}>
+                    Navigation: {reviewDetail?.exam?.navigation_mode === 'FORWARD_ONLY' ? 'Forward Only' : 'Forward & Backward'}
+                  </span>
+                  {reviewDetail?.attempt?.submission_reason && (
+                    <span className={`badge ${reviewDetail?.attempt?.submission_reason === 'warning_threshold_exceeded' ? 'badge-danger' : reviewDetail?.attempt?.submission_reason === 'time_expired' ? 'badge-warning' : 'badge-success'}`} style={{ fontSize: '11px' }}>
+                      Reason: {reviewDetail.attempt.submission_reason}
+                    </span>
+                  )}
                 </div>
               </div>
 
@@ -511,7 +538,16 @@ export const ResultEvaluation = () => {
                     <div style={{ display: 'flex', flexDirection: 'column', gap: '16px' }}>
                       {(reviewDetail?.questions || []).map((q) => {
                         const ans = q.student_answer || {};
-                        const isMCQ = q.question_type === 'MCQ';
+                        const isSingleChoice = q.question_type === 'MCQ' || q.question_type === 'TRUE_FALSE';
+                        const isMultipleSelect = q.question_type === 'MULTIPLE_SELECT';
+                        const isNumerical = q.question_type === 'NUMERICAL';
+                        const isBlanks = q.question_type === 'FILL_IN_BLANKS';
+                        const isMatching = q.question_type === 'MATCHING';
+                        const isCode = q.question_type === 'CODE';
+                        const isDescriptive = q.question_type === 'DESCRIPTIVE';
+                        const isShortAnswer = q.question_type === 'SHORT_ANSWER';
+                        const isImageBased = q.question_type === 'IMAGE_BASED';
+                        const isManual = q.manual_grading || isDescriptive || isCode;
 
                         return (
                           <div
@@ -523,21 +559,43 @@ export const ResultEvaluation = () => {
                               background: '#fff',
                             }}
                           >
-                            <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: '8px' }}>
-                              <span style={{ fontWeight: '700', fontSize: '13px', color: 'var(--primary)' }}>
-                                QUESTION {q.order} • {isMCQ ? 'Multiple Choice (MCQ)' : 'Descriptive Essay'}
-                              </span>
+                            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '8px' }}>
+                              <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+                                <span style={{ fontWeight: '700', fontSize: '13px', color: 'var(--primary)' }}>
+                                  QUESTION {q.order} • {q.question_type.replace(/_/g, ' ')}
+                                </span>
+                                {isManual ? (
+                                  <span className="badge badge-warning" style={{ fontSize: '11px', background: '#fef3c7', color: '#b45309' }}>
+                                    Manual Grading
+                                  </span>
+                                ) : (
+                                  <span className="badge badge-neutral" style={{ fontSize: '11px' }}>
+                                    Auto-Graded
+                                  </span>
+                                )}
+                              </div>
                               <span style={{ fontSize: '13px', fontWeight: '700', color: 'var(--gray-700)' }}>
-                                Max {q.marks} Marks
+                                Max {q.marks} Marks {q.negative_marks > 0 ? `(-${q.negative_marks} neg)` : ''}
                               </span>
                             </div>
+
+                            {/* Image if Image-Based or attached */}
+                            {(q.image || q.image_url) && (
+                              <div style={{ marginBottom: '12px' }}>
+                                <img
+                                  src={q.image || q.image_url}
+                                  alt="Question diagram"
+                                  style={{ maxHeight: '250px', maxWidth: '100%', borderRadius: '6px', border: '1px solid var(--gray-200)' }}
+                                />
+                              </div>
+                            )}
 
                             <div style={{ fontSize: '15px', fontWeight: '600', color: 'var(--gray-900)', marginBottom: '12px' }}>
                               {q.question_text}
                             </div>
 
-                            {/* MCQ Choices Breakdown */}
-                            {isMCQ ? (
+                            {/* 1 & 3: Single Choice (MCQ & True/False) */}
+                            {isSingleChoice && (
                               <div style={{ display: 'flex', flexDirection: 'column', gap: '6px', marginBottom: '12px' }}>
                                 {(q.options || []).map((opt) => (
                                   <div
@@ -577,54 +635,170 @@ export const ResultEvaluation = () => {
                                     </div>
                                   </div>
                                 ))}
-                                <div style={{ fontSize: '12px', color: 'var(--gray-600)', marginTop: '4px' }}>
-                                  Auto-calculated Score: <strong>{ans.awarded_marks !== null ? `${ans.awarded_marks} / ${q.marks}` : '0 / ' + q.marks}</strong>
+                              </div>
+                            )}
+
+                            {/* 2: Multiple Select */}
+                            {isMultipleSelect && (
+                              <div style={{ display: 'flex', flexDirection: 'column', gap: '6px', marginBottom: '12px' }}>
+                                {(() => {
+                                  const selectedIds = (ans.answer_data?.selected_option_ids || []).map(Number);
+                                  return (q.options || []).map((opt) => {
+                                    const isSel = selectedIds.includes(Number(opt.id)) || opt.is_selected;
+                                    return (
+                                      <div
+                                        key={opt.id}
+                                        style={{
+                                          padding: '8px 12px',
+                                          borderRadius: '6px',
+                                          fontSize: '13px',
+                                          display: 'flex',
+                                          justifyContent: 'space-between',
+                                          alignItems: 'center',
+                                          background: isSel
+                                            ? opt.is_correct
+                                              ? '#ecfdf5'
+                                              : '#fef2f2'
+                                            : '#f8fafc',
+                                          border: isSel
+                                            ? opt.is_correct
+                                              ? '1px solid #10b981'
+                                              : '1px solid #ef4444'
+                                            : '1px solid var(--gray-200)',
+                                        }}
+                                      >
+                                        <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+                                          <span>{isSel ? '☑' : '☐'}</span>
+                                          <span>{opt.option_text}</span>
+                                        </div>
+                                        <div style={{ fontSize: '11px', fontWeight: '700' }}>
+                                          {isSel && (
+                                            <span style={{ marginRight: '8px', color: opt.is_correct ? '#059669' : '#dc2626' }}>
+                                              [Student Selected]
+                                            </span>
+                                          )}
+                                          {opt.is_correct && (
+                                            <span style={{ color: '#059669' }}>✓ Correct Option</span>
+                                          )}
+                                        </div>
+                                      </div>
+                                    );
+                                  });
+                                })()}
+                              </div>
+                            )}
+
+                            {/* 8: Numerical Answer */}
+                            {isNumerical && (
+                              <div style={{ background: '#f8fafc', padding: '12px', borderRadius: '6px', border: '1px solid var(--gray-200)', marginBottom: '12px', fontSize: '13px' }}>
+                                <div>Student Answer: <strong>{ans.answer_data?.numerical_value ?? ans.text_response ?? <em style={{ color: 'var(--gray-400)' }}>None</em>}</strong></div>
+                                <div style={{ color: 'var(--gray-600)', marginTop: '4px' }}>
+                                  Target Answer: <strong>{q.correct_answer_data?.value}</strong> (Tolerance: ±{q.correct_answer_data?.tolerance || 0})
                                 </div>
                               </div>
-                            ) : (
-                              /* Descriptive Written Response & Marking Controls */
-                              <div>
-                                <div style={{ background: '#f8fafc', padding: '14px', borderRadius: '6px', border: '1px solid var(--gray-200)', marginBottom: '14px' }}>
-                                  <div style={{ fontSize: '11px', color: 'var(--gray-500)', fontWeight: '700', textTransform: 'uppercase', marginBottom: '6px' }}>
-                                    Student Written Submission:
+                            )}
+
+                            {/* 6: Fill in the Blanks */}
+                            {isBlanks && (
+                              <div style={{ background: '#f8fafc', padding: '12px', borderRadius: '6px', border: '1px solid var(--gray-200)', marginBottom: '12px', fontSize: '13px' }}>
+                                <div style={{ fontWeight: '700', marginBottom: '6px' }}>Student Responses:</div>
+                                {(ans.answer_data?.blanks || (ans.text_response ? [ans.text_response] : [])).map((b, idx) => (
+                                  <div key={idx} style={{ marginTop: '2px' }}>
+                                    Blank #{idx + 1}: <strong>{b || <em style={{ color: 'var(--gray-400)' }}>Empty</em>}</strong>
+                                    <span style={{ color: 'var(--gray-500)', marginLeft: '8px' }}>
+                                      (Accepted: {(q.correct_answer_data?.blanks?.[idx]?.accepted || []).join(' / ') || 'N/A'})
+                                    </span>
                                   </div>
-                                  <div style={{ fontSize: '14px', color: 'var(--gray-900)', whiteSpace: 'pre-wrap', lineHeight: '1.6' }}>
-                                    {ans.text_response || <em style={{ color: 'var(--gray-400)' }}>No response provided for this question.</em>}
+                                ))}
+                              </div>
+                            )}
+
+                            {/* 7: Matching */}
+                            {isMatching && (
+                              <div style={{ background: '#f8fafc', padding: '12px', borderRadius: '6px', border: '1px solid var(--gray-200)', marginBottom: '12px', fontSize: '13px' }}>
+                                <div style={{ fontWeight: '700', marginBottom: '6px' }}>Student Matches:</div>
+                                {Object.entries(ans.answer_data?.matches || {}).map(([l, r], idx) => {
+                                  const targetMatch = (q.correct_answer_data?.pairs || []).find(p => p.left === l)?.right;
+                                  const isCorrect = targetMatch === r;
+                                  return (
+                                    <div key={idx} style={{ marginTop: '4px', display: 'flex', gap: '8px', alignItems: 'center' }}>
+                                      <span>{l} ➔ <strong>{r}</strong></span>
+                                      {isCorrect ? (
+                                        <span style={{ color: '#059669', fontSize: '11px', fontWeight: '700' }}>✓ Correct</span>
+                                      ) : (
+                                        <span style={{ color: '#dc2626', fontSize: '11px' }}>✗ Expected: {targetMatch || '—'}</span>
+                                      )}
+                                    </div>
+                                  );
+                                })}
+                              </div>
+                            )}
+
+                            {/* 10: Code Question */}
+                            {isCode && (
+                              <div style={{ marginBottom: '12px' }}>
+                                <div style={{ fontSize: '11px', color: 'var(--gray-500)', fontWeight: '700', textTransform: 'uppercase', marginBottom: '4px' }}>
+                                  Submitted Code:
+                                </div>
+                                <pre style={{ background: '#0f172a', color: '#f8fafc', padding: '12px', borderRadius: '6px', fontSize: '13px', fontFamily: 'monospace', overflowX: 'auto', whiteSpace: 'pre-wrap' }}>
+                                  <code>{ans.answer_data?.code || ans.text_response || '// No code submitted.'}</code>
+                                </pre>
+                              </div>
+                            )}
+
+                            {/* 5: Descriptive or Short Answer (without choices) */}
+                            {(isDescriptive || (isShortAnswer && !q.options?.length) || (isImageBased && !q.options?.length)) && (
+                              <div style={{ background: '#f8fafc', padding: '14px', borderRadius: '6px', border: '1px solid var(--gray-200)', marginBottom: '14px' }}>
+                                <div style={{ fontSize: '11px', color: 'var(--gray-500)', fontWeight: '700', textTransform: 'uppercase', marginBottom: '6px' }}>
+                                  Student Written Submission:
+                                </div>
+                                <div style={{ fontSize: '14px', color: 'var(--gray-900)', whiteSpace: 'pre-wrap', lineHeight: '1.6' }}>
+                                  {ans.text_response || ans.answer_data?.text_response || <em style={{ color: 'var(--gray-400)' }}>No response provided for this question.</em>}
+                                </div>
+                              </div>
+                            )}
+
+                            {/* Scoring & Feedback Controls */}
+                            {isManual ? (
+                              ans.id ? (
+                                <div style={{ display: 'grid', gridTemplateColumns: '150px 1fr', gap: '14px', alignItems: 'flex-start', background: '#f0fdf4', padding: '12px 16px', borderRadius: '6px', border: '1px solid #bbf7d0' }}>
+                                  <div className="form-group" style={{ margin: 0 }}>
+                                    <label className="form-label" style={{ fontSize: '12px', fontWeight: '700' }}>
+                                      Marks (0 to {q.marks}) *
+                                    </label>
+                                    <input
+                                      type="number"
+                                      step="0.5"
+                                      min="0"
+                                      max={q.marks}
+                                      className="form-control"
+                                      value={marksState[ans.id] !== undefined ? marksState[ans.id] : ''}
+                                      onChange={(e) => setMarksState((prev) => ({ ...prev, [ans.id]: e.target.value }))}
+                                      placeholder={`0 - ${q.marks}`}
+                                    />
+                                  </div>
+
+                                  <div className="form-group" style={{ margin: 0 }}>
+                                    <label className="form-label" style={{ fontSize: '12px', fontWeight: '700' }}>
+                                      Question Feedback (Optional)
+                                    </label>
+                                    <input
+                                      type="text"
+                                      className="form-control"
+                                      value={commentsState[ans.id] !== undefined ? commentsState[ans.id] : ''}
+                                      onChange={(e) => setCommentsState((prev) => ({ ...prev, [ans.id]: e.target.value }))}
+                                      placeholder="Specific feedback on this response..."
+                                    />
                                   </div>
                                 </div>
-
-                                {ans.id && (
-                                  <div style={{ display: 'grid', gridTemplateColumns: '150px 1fr', gap: '14px', alignItems: 'flex-start', background: '#f0fdf4', padding: '12px 16px', borderRadius: '6px', border: '1px solid #bbf7d0' }}>
-                                    <div className="form-group" style={{ margin: 0 }}>
-                                      <label className="form-label" style={{ fontSize: '12px', fontWeight: '700' }}>
-                                        Marks (0 to {q.marks}) *
-                                      </label>
-                                      <input
-                                        type="number"
-                                        step="0.5"
-                                        min="0"
-                                        max={q.marks}
-                                        className="form-control"
-                                        value={marksState[ans.id] !== undefined ? marksState[ans.id] : ''}
-                                        onChange={(e) => setMarksState((prev) => ({ ...prev, [ans.id]: e.target.value }))}
-                                        placeholder={`0 - ${q.marks}`}
-                                      />
-                                    </div>
-
-                                    <div className="form-group" style={{ margin: 0 }}>
-                                      <label className="form-label" style={{ fontSize: '12px', fontWeight: '700' }}>
-                                        Question Feedback (Optional)
-                                      </label>
-                                      <input
-                                        type="text"
-                                        className="form-control"
-                                        value={commentsState[ans.id] !== undefined ? commentsState[ans.id] : ''}
-                                        onChange={(e) => setCommentsState((prev) => ({ ...prev, [ans.id]: e.target.value }))}
-                                        placeholder="Specific feedback on this response..."
-                                      />
-                                    </div>
-                                  </div>
-                                )}
+                              ) : (
+                                <div style={{ fontSize: '12px', color: 'var(--gray-500)', fontStyle: 'italic' }}>
+                                  No student response was submitted to grade for this question.
+                                </div>
+                              )
+                            ) : (
+                              <div style={{ fontSize: '12px', color: 'var(--gray-600)', marginTop: '4px' }}>
+                                Auto-calculated Score: <strong>{ans.awarded_marks !== null && ans.awarded_marks !== undefined ? `${ans.awarded_marks} / ${q.marks}` : `0 / ${q.marks}`}</strong>
                               </div>
                             )}
                           </div>

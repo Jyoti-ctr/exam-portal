@@ -11,7 +11,7 @@ import {
   requestManagedCamera,
 } from '../utils/proctoringHelpers';
 
-export { ProctoringState, STATE_CONFIG, isCameraStreamLive, stopMediaStream, stopAllCameraStreams };
+
 
 // Module-level singleton cache for MediaPipe FaceDetector to prevent repeated downloads
 let sharedVisionPromise = null;
@@ -72,14 +72,14 @@ const ProctoringBadgeComponent = ({
 
   // Synchronous refs for intervals & closures
   const monitoringStateRef = useRef(ProctoringState.CAMERA_INITIALIZING);
-  monitoringStateRef.current = monitoringState;
-
   const onWarningRef = useRef(onWarning);
   const onFullscreenWarningRef = useRef(onFullscreenWarning);
+
   useEffect(() => {
+    monitoringStateRef.current = monitoringState;
     onWarningRef.current = onWarning;
     onFullscreenWarningRef.current = onFullscreenWarning;
-  });
+  }, [monitoringState, onWarning, onFullscreenWarning]);
 
   const noFaceDurationRef = useRef(0);
   const multiFaceDurationRef = useRef(0);
@@ -133,12 +133,6 @@ const ProctoringBadgeComponent = ({
     const now = Date.now();
     if (now - lastLoggedEventRef.current.DISCONNECT > 6000) {
       lastLoggedEventRef.current.DISCONNECT = now;
-      studentAPI.logProctoringEvent({
-        attempt_id: attemptId,
-        event_type: 'CAMERA_DISCONNECTED',
-        details: { reason, timestamp: new Date().toISOString() },
-      }).catch(() => {});
-
       if (onWarningRef.current) {
         onWarningRef.current({
           type: 'CAMERA_DISCONNECTED',
@@ -146,7 +140,7 @@ const ProctoringBadgeComponent = ({
         });
       }
     }
-  }, [attemptId]);
+  }, []);
 
   // Handles camera feed restored
   const handleCameraRestored = useCallback(() => {
@@ -266,16 +260,10 @@ const ProctoringBadgeComponent = ({
     // 3. Tab Visibility & Fullscreen Listeners
     const handleVisibilityChange = () => {
       if (document.hidden) {
-        studentAPI.logProctoringEvent({
-          attempt_id: attemptId,
-          event_type: 'TAB_BLUR',
-          details: { timestamp: new Date().toISOString() },
-        }).catch(() => {});
-
         if (onWarningRef.current) {
           onWarningRef.current({
-            type: 'TAB_SWITCH',
-            message: 'You navigated away or switched tabs. Tab switches are logged for instructor audit.',
+            type: 'TAB_BLUR',
+            message: 'You switched tabs or minimized the exam window. Tab switches are logged for instructor audit.',
           });
         }
       } else {
@@ -288,11 +276,12 @@ const ProctoringBadgeComponent = ({
     };
 
     const handleWindowBlur = () => {
-      studentAPI.logProctoringEvent({
-        attempt_id: attemptId,
-        event_type: 'TAB_BLUR',
-        details: { signal: 'window_blur', timestamp: new Date().toISOString() },
-      }).catch(() => {});
+      if (onWarningRef.current) {
+        onWarningRef.current({
+          type: 'TAB_BLUR',
+          message: 'You navigated away from the exam tab. Tab switches are logged for instructor audit.',
+        });
+      }
     };
 
     const handleWindowFocus = () => {
@@ -305,12 +294,6 @@ const ProctoringBadgeComponent = ({
 
     const handleFullscreenChange = () => {
       if (!document.fullscreenElement) {
-        studentAPI.logProctoringEvent({
-          attempt_id: attemptId,
-          event_type: 'FULLSCREEN_EXIT',
-          details: { timestamp: new Date().toISOString() },
-        }).catch(() => {});
-
         if (onFullscreenWarningRef.current) onFullscreenWarningRef.current();
         if (onWarningRef.current) {
           onWarningRef.current({
@@ -425,18 +408,9 @@ const ProctoringBadgeComponent = ({
             lastLoggedEventRef.current.NO_FACE = now;
             setLastWarningMsg('No face detected. Please face the webcam.');
 
-            studentAPI.logProctoringEvent({
-              attempt_id: attemptId,
-              event_type: 'NO_FACE_DETECTED',
-              details: {
-                face_count: 0,
-                duration_seconds: Math.round(noFaceDurationRef.current),
-              },
-            }).catch(() => {});
-
             if (onWarningRef.current) {
               onWarningRef.current({
-                type: 'NO_FACE',
+                type: 'NO_FACE_DETECTED',
                 message: 'No face detected in webcam frame. Please ensure your face is clearly visible.',
               });
             }
@@ -456,18 +430,9 @@ const ProctoringBadgeComponent = ({
             lastLoggedEventRef.current.MULTI_FACE = now;
             setLastWarningMsg(`Multiple faces detected (${count} visible).`);
 
-            studentAPI.logProctoringEvent({
-              attempt_id: attemptId,
-              event_type: 'MULTIPLE_FACES_DETECTED',
-              details: {
-                face_count: count,
-                duration_seconds: Math.round(multiFaceDurationRef.current),
-              },
-            }).catch(() => {});
-
             if (onWarningRef.current) {
               onWarningRef.current({
-                type: 'MULTIPLE_FACES',
+                type: 'MULTIPLE_FACES_DETECTED',
                 message: `Multiple faces (${count}) detected in camera. Only the authorized examinee should be present.`,
               });
             }

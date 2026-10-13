@@ -14,7 +14,7 @@ export const StudentDashboard = () => {
       try {
         const res = await studentAPI.getAvailableExams();
         setExams(res.data);
-      } catch (err) {
+      } catch {
         setError('Failed to load available exams.');
       } finally {
         setLoading(false);

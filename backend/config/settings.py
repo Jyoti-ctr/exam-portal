@@ -156,6 +156,10 @@ USE_TZ = True
 
 STATIC_URL = 'static/'
 
+# Media files (Question images, attachments)
+MEDIA_URL = '/media/'
+MEDIA_ROOT = BASE_DIR / 'media'
+
 # CORS Configuration
 _cors_origins_raw = os.getenv(
     'CORS_ALLOWED_ORIGINS',

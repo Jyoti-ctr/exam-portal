@@ -15,6 +15,7 @@ class StudentAnswerSerializer(serializers.ModelSerializer):
             'question_id',
             'selected_option_id',
             'text_response',
+            'answer_data',
             'is_marked_for_review',
             'updated_at',
         ]
@@ -24,7 +25,15 @@ class AutosavePayloadSerializer(serializers.Serializer):
     question_id = serializers.IntegerField(required=True)
     selected_option_id = serializers.IntegerField(required=False, allow_null=True)
     text_response = serializers.CharField(required=False, allow_blank=True, default='')
+    answer_data = serializers.DictField(required=False, default=dict)
     is_marked_for_review = serializers.BooleanField(required=False, default=False)
+
+
+class NavigationAdvancePayloadSerializer(serializers.Serializer):
+    """
+    Validates requests to advance to next question in FORWARD_ONLY mode.
+    """
+    target_index = serializers.IntegerField(required=True)
 
 
 class ExamAttemptDetailSerializer(serializers.ModelSerializer):
@@ -33,6 +42,11 @@ class ExamAttemptDetailSerializer(serializers.ModelSerializer):
     duration_minutes = serializers.IntegerField(source='exam.duration_minutes', read_only=True)
     total_marks = serializers.DecimalField(source='exam.total_marks', max_digits=6, decimal_places=2, read_only=True)
     enable_proctoring = serializers.BooleanField(source='exam.enable_proctoring', read_only=True)
+    navigation_mode = serializers.CharField(source='exam.navigation_mode', read_only=True)
+    warning_threshold = serializers.IntegerField(source='exam.warning_threshold', read_only=True)
+    max_warnings = serializers.IntegerField(source='exam.warning_threshold', read_only=True)
+    is_camera_mandatory = serializers.BooleanField(source='exam.is_camera_mandatory', read_only=True)
+    monitored_warning_categories = serializers.ListField(source='exam.monitored_warning_categories', read_only=True)
     remaining_seconds = serializers.IntegerField(read_only=True)
     saved_answers = StudentAnswerSerializer(source='answers', many=True, read_only=True)
     questions = serializers.SerializerMethodField()
@@ -47,6 +61,15 @@ class ExamAttemptDetailSerializer(serializers.ModelSerializer):
             'duration_minutes',
             'total_marks',
             'enable_proctoring',
+            'navigation_mode',
+            'warning_threshold',
+            'max_warnings',
+            'warning_count',
+            'submission_reason',
+            'is_camera_mandatory',
+            'monitored_warning_categories',
+            'current_question_index',
+            'highest_question_index',
             'attempt_number',
             'status',
             'started_at',

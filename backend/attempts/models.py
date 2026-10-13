@@ -40,6 +40,24 @@ class ExamAttempt(models.Model):
     )
     submitted_at = models.DateTimeField(null=True, blank=True)
     is_completed = models.BooleanField(default=False)
+    warning_count = models.PositiveIntegerField(
+        default=0,
+        help_text="Authoritative server count of qualifying warnings received"
+    )
+    submission_reason = models.CharField(
+        max_length=50,
+        blank=True,
+        default='',
+        help_text="Reason for submission: manual, time_expired, warning_threshold_exceeded"
+    )
+    current_question_index = models.PositiveIntegerField(
+        default=0,
+        help_text="Current question index in FORWARD_ONLY mode"
+    )
+    highest_question_index = models.PositiveIntegerField(
+        default=0,
+        help_text="Highest question index reached in progression"
+    )
 
     class Meta:
         ordering = ['-started_at']
@@ -95,7 +113,12 @@ class StudentAnswer(models.Model):
     )
     text_response = models.TextField(
         blank=True,
-        help_text="Response text for descriptive questions"
+        help_text="Response text for descriptive questions, code, or short answers"
+    )
+    answer_data = models.JSONField(
+        default=dict,
+        blank=True,
+        help_text="Structured answer payload for multiple select, matching, blanks, numerical, code, etc."
     )
     is_marked_for_review = models.BooleanField(
         default=False,

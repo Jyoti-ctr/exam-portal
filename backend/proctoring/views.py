@@ -1,19 +1,26 @@
 from django.shortcuts import get_object_or_404
 from django.utils import timezone
+from django.db import transaction
 from rest_framework.views import APIView
 from rest_framework import generics, status
 from rest_framework.response import Response
 from accounts.permissions import IsStudentUser, IsFacultyUser
 from attempts.models import ExamAttempt
+from attempts.grading import grade_attempt
 from .models import ProctoringEvent
-from .serializers import ProctoringEventSerializer, ProctoringEventCreateSerializer
+from .serializers import (
+    ProctoringEventSerializer,
+    ProctoringEventCreateSerializer,
+    EVENT_TYPE_ALIASES,
+)
 from .incident_analysis import analyze_attempt_events
 
 
 class LogProctoringEventView(APIView):
     """
     POST: Student client reports an audit signal (e.g. fullscreen exit, tab switch, face counts).
-    Includes cooldown debounce to prevent client-side spamming.
+    Maintains authoritative server-side warning counter.
+    Triggers automatic exam submission when warning count exceeds the threshold (warning 9 when threshold is 8).
     """
     permission_classes = [IsStudentUser]
 
@@ -25,42 +32,145 @@ class LogProctoringEventView(APIView):
         event_type = serializer.validated_data['event_type']
         details = serializer.validated_data.get('details', {})
 
-        # Ensure attempt belongs to user and is currently active
-        attempt = get_object_or_404(
-            ExamAttempt,
-            id=attempt_id,
-            student=request.user
-        )
+        with transaction.atomic():
+            # Concurrency-safe lock on the attempt record
+            attempt = ExamAttempt.objects.select_for_update().select_related('exam').filter(
+                id=attempt_id,
+                student=request.user
+            ).first()
 
-        if attempt.status != ExamAttempt.AttemptStatus.IN_PROGRESS or attempt.is_completed:
-            return Response(
-                {'error': 'Attempt is not currently in progress.'},
-                status=status.HTTP_400_BAD_REQUEST
+            if not attempt:
+                return Response(
+                    {'error': 'Attempt not found or unauthorized.'},
+                    status=status.HTTP_404_NOT_FOUND
+                )
+
+            # Reject event if attempt already completed or submitted
+            if attempt.is_completed or attempt.status in [
+                ExamAttempt.AttemptStatus.SUBMITTED,
+                ExamAttempt.AttemptStatus.AUTO_SUBMITTED,
+                ExamAttempt.AttemptStatus.EXPIRED,
+            ]:
+                return Response({
+                    'error': 'Attempt is not currently in progress or is already finalized.',
+                    'status': 'already_finalized',
+                    'is_completed': True,
+                    'warning_count': attempt.warning_count,
+                    'submission_reason': attempt.submission_reason,
+                }, status=status.HTTP_400_BAD_REQUEST)
+
+            # Cooldown check: ignore duplicate identical events within 3.5 seconds
+            recent_event = ProctoringEvent.objects.filter(
+                attempt=attempt,
+                event_type=event_type,
+                timestamp__gte=timezone.now() - timezone.timedelta(seconds=3.5)
+            ).first()
+
+            threshold = attempt.exam.warning_threshold or 8
+
+            if recent_event:
+                resp_data = ProctoringEventSerializer(recent_event).data
+                resp_data.update({
+                    'warning_count': attempt.warning_count,
+                    'max_warnings': threshold,
+                    'warning_incremented': False,
+                    'is_final_warning': attempt.warning_count == threshold,
+                    'auto_submitted': False,
+                    'message': 'Duplicate event suppressed by cooldown.'
+                })
+                return Response(resp_data, status=status.HTTP_200_OK)
+
+            # Determine qualifying warning categories
+            configured_categories = attempt.exam.monitored_warning_categories or []
+            if configured_categories:
+                qualifying_events = {EVENT_TYPE_ALIASES.get(cat, cat) for cat in configured_categories}
+            else:
+                qualifying_events = {
+                    ProctoringEvent.EventType.TAB_BLUR,
+                    ProctoringEvent.EventType.FULLSCREEN_EXIT,
+                    ProctoringEvent.EventType.CAMERA_DISCONNECTED,
+                    ProctoringEvent.EventType.MULTIPLE_FACES_DETECTED,
+                }
+
+            # If camera monitoring is not enabled on exam, don't count CAMERA_DISCONNECTED as a cheating warning
+            if not attempt.exam.enable_proctoring and ProctoringEvent.EventType.CAMERA_DISCONNECTED in qualifying_events:
+                qualifying_events.remove(ProctoringEvent.EventType.CAMERA_DISCONNECTED)
+
+            is_qualifying_warning = event_type in qualifying_events
+
+            event = ProctoringEvent.objects.create(
+                attempt=attempt,
+                event_type=event_type,
+                details=details
             )
 
-        # Cooldown check: ignore duplicate identical events within 3 seconds
-        recent_event = ProctoringEvent.objects.filter(
-            attempt=attempt,
-            event_type=event_type,
-            timestamp__gte=timezone.now() - timezone.timedelta(seconds=3)
-        ).first()
+            if is_qualifying_warning:
+                attempt.warning_count += 1
+                new_warning_count = attempt.warning_count
+                event.details['warning_count'] = new_warning_count
+                event.details['is_qualifying_warning'] = True
+                event.save()
 
-        if recent_event:
-            return Response(
-                ProctoringEventSerializer(recent_event).data,
-                status=status.HTTP_200_OK
-            )
+                # Trigger automatic submission if warning count strictly exceeds threshold (e.g. 9 > 8)
+                if new_warning_count > threshold:
+                    attempt.status = ExamAttempt.AttemptStatus.AUTO_SUBMITTED
+                    attempt.is_completed = True
+                    attempt.submitted_at = timezone.now()
+                    attempt.submission_reason = 'warning_threshold_exceeded'
+                    attempt.save()
 
-        event = ProctoringEvent.objects.create(
-            attempt=attempt,
-            event_type=event_type,
-            details=details
-        )
+                    # Execute authoritative objective grading
+                    grade_attempt(attempt)
 
-        return Response(
-            ProctoringEventSerializer(event).data,
-            status=status.HTTP_201_CREATED
-        )
+                    resp_data = ProctoringEventSerializer(event).data
+                    resp_data.update({
+                        'warning_count': new_warning_count,
+                        'max_warnings': threshold,
+                        'warning_incremented': True,
+                        'is_final_warning': False,
+                        'auto_submitted': True,
+                        'submission_reason': 'warning_threshold_exceeded',
+                        'message': f'Warning limit exceeded ({new_warning_count}/{threshold}). The exam has been automatically submitted.'
+                    })
+                    return Response(resp_data, status=status.HTTP_201_CREATED)
+
+                elif new_warning_count == threshold:
+                    attempt.save()
+                    resp_data = ProctoringEventSerializer(event).data
+                    resp_data.update({
+                        'warning_count': new_warning_count,
+                        'max_warnings': threshold,
+                        'warning_incremented': True,
+                        'is_final_warning': True,
+                        'auto_submitted': False,
+                        'message': f'FINAL WARNING: You have reached {new_warning_count} of {threshold} warnings. Any further violation will automatically submit your exam immediately.'
+                    })
+                    return Response(resp_data, status=status.HTTP_201_CREATED)
+
+                else:
+                    attempt.save()
+                    resp_data = ProctoringEventSerializer(event).data
+                    resp_data.update({
+                        'warning_count': new_warning_count,
+                        'max_warnings': threshold,
+                        'warning_incremented': True,
+                        'is_final_warning': False,
+                        'auto_submitted': False,
+                        'message': f'Warning {new_warning_count} of {threshold}: Violation detected ({event.get_event_type_display()}).'
+                    })
+                    return Response(resp_data, status=status.HTTP_201_CREATED)
+
+            else:
+                # Non-warning event (recovery or technical info)
+                resp_data = ProctoringEventSerializer(event).data
+                resp_data.update({
+                    'warning_count': attempt.warning_count,
+                    'max_warnings': threshold,
+                    'warning_incremented': False,
+                    'is_final_warning': False,
+                    'auto_submitted': False,
+                })
+                return Response(resp_data, status=status.HTTP_201_CREATED)
 
 
 class FacultyAttemptEventsListView(generics.ListAPIView):

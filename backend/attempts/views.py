@@ -176,6 +176,7 @@ class AutosaveAnswerView(APIView):
                 attempt.status = ExamAttempt.AttemptStatus.AUTO_SUBMITTED
                 attempt.is_completed = True
                 attempt.submitted_at = attempt.expires_at
+                attempt.submission_reason = 'time_expired'
                 attempt.save()
                 grade_mcq_attempt(attempt)
                 return Response(
@@ -186,12 +187,38 @@ class AutosaveAnswerView(APIView):
             question_id = serializer.validated_data['question_id']
             opt_id = serializer.validated_data.get('selected_option_id')
             text_ans = serializer.validated_data.get('text_response', '')
+            ans_data = serializer.validated_data.get('answer_data', {})
             marked = serializer.validated_data.get('is_marked_for_review', False)
 
             # Ensure question belongs to this exam
             question = get_object_or_404(Question, id=question_id, exam=attempt.exam)
 
-            # Security check: Ensure option belongs to this question
+            # Enforce Forward-Only Navigation restriction if enabled
+            if attempt.exam.navigation_mode == Exam.NavigationMode.FORWARD_ONLY:
+                qs = attempt.exam.questions.all().order_by('order', 'id')
+                if attempt.exam.shuffle_questions:
+                    import random
+                    rng = random.Random(attempt.id)
+                    qs_list = list(qs)
+                    rng.shuffle(qs_list)
+                    ordered_ids = [q.id for q in qs_list]
+                else:
+                    ordered_ids = list(qs.values_list('id', flat=True))
+
+                if question_id in ordered_ids:
+                    q_idx = ordered_ids.index(question_id)
+                    if q_idx < attempt.current_question_index:
+                        return Response(
+                            {'error': 'Forward Only rule: You cannot modify answers to previously answered questions.'},
+                            status=status.HTTP_400_BAD_REQUEST
+                        )
+                    if q_idx > attempt.current_question_index:
+                        return Response(
+                            {'error': 'Forward Only rule: You cannot skip ahead to answer future questions.'},
+                            status=status.HTTP_400_BAD_REQUEST
+                        )
+
+            # Security check: Ensure option belongs to this question if provided
             if opt_id is not None:
                 if not Option.objects.filter(id=opt_id, question=question).exists():
                     return Response(
@@ -206,6 +233,7 @@ class AutosaveAnswerView(APIView):
                 defaults={
                     'selected_option_id': opt_id,
                     'text_response': text_ans,
+                    'answer_data': ans_data,
                     'is_marked_for_review': marked,
                 }
             )
@@ -216,6 +244,40 @@ class AutosaveAnswerView(APIView):
             'remaining_seconds': attempt.remaining_seconds,
             'updated_at': answer.updated_at
         }, status=status.HTTP_200_OK)
+
+
+class AdvanceQuestionView(APIView):
+    """
+    POST: Advances the student's permitted progression to the next question in FORWARD_ONLY mode.
+    Server-authoritative: students cannot skip ahead or reset permitted index.
+    """
+    permission_classes = [IsStudentUser]
+
+    def post(self, request, attempt_id):
+        with transaction.atomic():
+            attempt = ExamAttempt.objects.select_for_update().filter(
+                id=attempt_id,
+                student=request.user
+            ).first()
+
+            if not attempt:
+                return Response({'error': 'Attempt not found or unauthorized.'}, status=status.HTTP_404_NOT_FOUND)
+
+            if attempt.is_completed:
+                return Response({'error': 'Attempt is already finalized.'}, status=status.HTTP_400_BAD_REQUEST)
+
+            total_questions = attempt.exam.questions.count()
+            if attempt.current_question_index < total_questions - 1:
+                attempt.current_question_index += 1
+                attempt.highest_question_index = max(attempt.highest_question_index, attempt.current_question_index)
+                attempt.save()
+
+            return Response({
+                'status': 'advanced',
+                'current_question_index': attempt.current_question_index,
+                'highest_question_index': attempt.highest_question_index,
+                'total_questions': total_questions,
+            }, status=status.HTTP_200_OK)
 
 
 class HeartbeatView(APIView):
@@ -235,6 +297,7 @@ class HeartbeatView(APIView):
                     attempt.status = ExamAttempt.AttemptStatus.AUTO_SUBMITTED
                     attempt.is_completed = True
                     attempt.submitted_at = attempt.expires_at
+                    attempt.submission_reason = 'time_expired'
                     attempt.save()
                     grade_mcq_attempt(attempt)
             return Response({
@@ -251,7 +314,7 @@ class HeartbeatView(APIView):
 
 class SubmitAttemptView(APIView):
     """
-    POST: Finalizes attempt submission and triggers automatic MCQ grading.
+    POST: Finalizes attempt submission and triggers automatic grading.
     Guarded against duplicate submissions; idempotent.
     """
     permission_classes = [IsStudentUser]
@@ -275,6 +338,7 @@ class SubmitAttemptView(APIView):
                     'status': 'already_submitted',
                     'message': 'This attempt was already submitted.',
                     'attempt_status': attempt.status,
+                    'submission_reason': attempt.submission_reason,
                     'submitted_at': attempt.submitted_at
                 }, status=status.HTTP_200_OK)
 
@@ -283,9 +347,11 @@ class SubmitAttemptView(APIView):
             if now > attempt.expires_at:
                 attempt.status = ExamAttempt.AttemptStatus.AUTO_SUBMITTED
                 attempt.submitted_at = attempt.expires_at
+                attempt.submission_reason = 'time_expired'
             else:
                 attempt.status = ExamAttempt.AttemptStatus.SUBMITTED
                 attempt.submitted_at = now
+                attempt.submission_reason = 'manual'
 
             attempt.is_completed = True
             attempt.save()
@@ -296,6 +362,7 @@ class SubmitAttemptView(APIView):
         return Response({
             'status': 'submitted',
             'attempt_status': attempt.status,
+            'submission_reason': attempt.submission_reason,
             'message': 'Your exam has been submitted successfully.',
             'submitted_at': attempt.submitted_at
         }, status=status.HTTP_200_OK)
